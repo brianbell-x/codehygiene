@@ -10,14 +10,14 @@ Passing tests, typecheckers, and formatters (`ruff`, `eslint`, `prettier`, `rust
 
 ## Run It
 
-The runtime (`__init__.py`, `__main__.py`) and `weights.npz` (`10.5 KiB` `1.58-bit` ternary model) live directly inside `<SKILL_DIR>` (the directory containing this `SKILL.md`):
+The runtime (`__init__.py`, `__main__.py`) and `weights.npz` (`10.5 KiB` `1.58-bit` ternary model) live directly inside `<SKILL_DIR>` (the directory containing this `SKILL.md`) and run offline across macOS, Linux, and Windows:
 
 ```bash
 python3 "<SKILL_DIR>" <touched-files> --check
 ```
 
-- Windows PowerShell / `cmd` (where `python` is standard): `python "<SKILL_DIR>" <touched-files> --check`
-- No global `numpy`: `uv run --with numpy "<SKILL_DIR>/__init__.py" <touched-files> --check`
+- Environments where `python` is the active interpreter (virtualenvs, conda, Windows): `python "<SKILL_DIR>" <touched-files> --check`
+- Environments without `numpy` preinstalled: `uv run --with numpy "<SKILL_DIR>/__init__.py" <touched-files> --check`
 - Installed on `PATH`: `codehygiene <touched-files> --check`
 - Structured output for batch fixes: pass `--json` (or pipe unsaved snippets via `stdin`).
 

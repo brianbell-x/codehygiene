@@ -10,6 +10,15 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]
+keywords = ["code-hygiene", "readability", "linter", "ai-agents", "skills", "weight-space-programming", "system-one", "ternary"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+]
 
 [project.scripts]
 codehygiene = "codehygiene:main"

@@ -4,7 +4,7 @@ An 11 KB, 1.58-bit ternary weight-space programmed System One model for code rea
 
 ![codehygiene diff](assets/diff.png)
 
-Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like cryptic golf or deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `428K`-parameter `1.58-bit` ternary neural network in pure NumPy (`~10 ms` on CPU) across 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
+Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like cryptic golf or deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `428K`-parameter `1.58-bit` ternary neural network in pure NumPy (`~10 ms` on CPU across macOS, Linux, and Windows) for 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
 
 - **1.58-bit ternary weight-space programmed:** No training data or gradient descent is used. Every 2D/3D weight, convolution, causal, attention, and embedding matrix in `weights.npz` has entries strictly in `{-1, 0, +1}` (`425,044` trits packed at `5` trits/byte + `3,253` 1D channel scales/biases = `10.5 KiB`), compiled directly from explicit mathematical circuits in `compile.py`.
 - **System One judgment:** No text is generated. A single forward pass returns calibrated `0.0–1.0` hygiene scores, 6 style sub-scores, a style archetype, and line-level `Squiggle` diagnostics.
@@ -34,7 +34,7 @@ example.py
 
 ## Quickstart
 
-Install as an agent skill (Claude Code, Codex, Cursor, Antigravity, Copilot) with bundled offline weights via `npx skills`:
+Install as a cross-platform agent skill (Claude Code, Codex, Cursor, Antigravity, Copilot on macOS, Linux, and Windows) with bundled offline weights via `npx skills`:
 
 ```bash
 npx skills add brianbell-x/codehygiene     # current project
@@ -116,7 +116,7 @@ Evaluated with zero training across a 54-slice production canon (`27` files, `11
 All `32` ternary `{-1, 0, +1}` matrices (`425,044` trits packed at `5` trits per `uint8` byte, `92.6%` zero) and `3,253` 1D scale/bias scalars in `codehygiene/weights.npz` (`10.52 KiB`) are deterministically generated from `compile.py`:
 
 ```bash
-python compile.py
+python3 compile.py
 ```
 
 ## References
