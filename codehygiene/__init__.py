@@ -6,13 +6,30 @@ import argparse
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
 import numpy as np
 
+__version__ = "0.1.0"
+__all__ = [
+    "ARCHETYPE_NAMES", "MAX_COLS", "MAX_REL_DIST", "Result", "SCORE_NAMES",
+    "SQUIGGLE_KINDS", "SQUIGGLE_MESSAGES", "Squiggle", "encode_byte_grid",
+    "lint", "load_weights", "main", "render_report", "rl_reward", "score",
+]
+
 MAX_COLS = 128
 MAX_REL_DIST = 32
+_CODE_EXTS = frozenset({
+    ".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".c", ".h",
+    ".cc", ".cpp", ".hpp", ".rs", ".go", ".zig", ".java", ".cs", ".lua", ".rb",
+    ".php", ".swift", ".kt", ".scala", ".sh",
+})
+_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn", "__pycache__", "node_modules", "target",
+    "build", "dist", "venv", ".venv", ".tox", ".mypy_cache", ".pytest_cache",
+})
 
 _SPEC = (
     ("nesting_pyramid", "Deep nested branching; prefer guard clauses"),
@@ -210,9 +227,12 @@ def rl_reward(
     return gate * (1.0 + weight * ((1.0 - hygiene_blend) * res.score + hygiene_blend * res.rl_hygiene))
 
 
-def render_report(label: str, src: str, thresh: float = 0.55, color: bool = True) -> str:
+def render_report(
+    label: str, src: str, thresh: float = 0.55,
+    color: bool = True, res: Result | None = None,
+) -> str:
     _, lines = encode_byte_grid(src, max_lines=100_000)
-    res = score(src, threshold=thresh)
+    res = res or score(src, threshold=thresh)
     b, d, y, c, g, r, z = _ANSI if color else ("",) * 7
     sc = (r, y, g)[int(res.score >= 0.40) + int(res.score >= 0.70)]
     pct = res.archetype_probs[res.archetype] * 100
@@ -230,29 +250,66 @@ def render_report(label: str, src: str, thresh: float = 0.55, color: bool = True
 
     out.append(f"\n  {y}{len(res.squiggles)} squiggle(s):{z}")
     for sq in res.squiggles:
-        src = lines[sq.line - 1]
+        ln = lines[sq.line - 1]
         pad = " " * (sq.col_start - 1)
-        wavy = "~" * max(1, min(len(src) - sq.col_start + 1, 72))
+        wavy = "~" * max(1, min(len(ln) - sq.col_start + 1, 72))
         tag = f"[{sq.kind} {sq.probability:.2f}]"
-        out.append(f"  {d}{sq.line:4d} |{z} {src}")
+        out.append(f"  {d}{sq.line:4d} |{z} {ln}")
         out.append(f"       {d}|{z} {pad}{y}{wavy} {tag}{z} {d}{sq.message}{z}")
     return "\n".join(out)
 
 
+def _walk_dir(root: Path) -> list[Path]:
+    found: list[Path] = []
+    for cur, dirs, files in os.walk(root):
+        dirs[:] = sorted(
+            d for d in dirs
+            if not d.startswith(".") and d not in _SKIP_DIRS and not d.endswith(".egg-info")
+        )
+        base = Path(cur)
+        found.extend(base / f for f in sorted(files) if Path(f).suffix.lower() in _CODE_EXTS)
+    return found
+
+
+def _expand_paths(specs: list[str]) -> list[Path]:
+    out: list[Path] = []
+    for s in specs:
+        pts = sorted(Path().glob(s)) if any(c in s for c in "*?[") else [Path(s)]
+        for p in pts:
+            out.extend(_walk_dir(p) if p.is_dir() else [p])
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="codehygiene")
-    ap.add_argument("files", nargs="*")
-    ap.add_argument("-t", "--threshold", type=float, default=0.55)
-    ap.add_argument("--json", action="store_true")
-    ap.add_argument("--no-color", action="store_true")
+    desc = "33 KB weight-space programmed System One model for linting code aesthetics."
+    ap = argparse.ArgumentParser(prog="codehygiene", description=desc)
+    ap.add_argument("files", nargs="*", help="Files, directories, or globs (stdin if piped)")
+    ap.add_argument("-t", "--threshold", type=float, default=0.55, help="Squiggle threshold")
+    ap.add_argument("--check", action="store_true", help="Exit 1 when squiggles are found")
+    ap.add_argument("--json", action="store_true", help="Output structured JSON")
+    ap.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
+    ap.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     args = ap.parse_args(argv)
 
-    targets = [(f, Path(f).read_text("utf-8", "replace")) for f in args.files]
-    targets = targets or [("<stdin>", sys.stdin.read())]
-    if args.json:
-        out = [score(s, threshold=args.threshold).to_dict() for _, s in targets]
-        body = out[0] if len(out) == 1 else dict(zip((k for k, _ in targets), out))
-        print(json.dumps(body, indent=2))
+    if not args.files and sys.stdin.isatty():
+        ap.print_help()
         return 0
-    print("\n\n".join(render_report(k, s, args.threshold, not args.no_color) for k, s in targets))
-    return 0
+    paths = _expand_paths(args.files)
+    targets = [(p.as_posix(), p.read_text("utf-8", "replace")) for p in paths]
+    if not args.files:
+        targets = [("<stdin>", sys.stdin.read())]
+    if not targets:
+        return 0
+
+    runs = [(k, s, score(s, threshold=args.threshold)) for k, s in targets]
+    exit_code = 1 if (args.check and any(r.squiggles for _, _, r in runs)) else 0
+    if args.json:
+        out = [r.to_dict() for _, _, r in runs]
+        single = len(out) == 1 and (not args.files or not Path(args.files[0]).is_dir())
+        body = out[0] if single else dict(zip((k for k, _, _ in runs), out))
+        print(json.dumps(body, indent=2))
+        return exit_code
+
+    reports = [render_report(k, s, args.threshold, not args.no_color, r) for k, s, r in runs]
+    print("\n\n".join(reports))
+    return exit_code
