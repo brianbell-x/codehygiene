@@ -1,12 +1,38 @@
 # codehygiene
 
-A 33 KB, weight-space programmed System One model for linting and scoring code aesthetics. All 427,114 float32 parameters (`53` tensors) are compiled analytically in pure NumPy over raw 7-bit ASCII `(L, 128)` byte grids—with no gradient descent, training corpus, tokenizers, regular expressions, or AST parsers.
+A 33 KB, weight-space programmed System One model for linting and scoring code aesthetics.
 
-Calibrated across 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`), a single forward pass returns calibrated System One judgments (`noul` probabilities, 6 structural `score` spectra, 5-way `choice` archetype) alongside line-level `Squiggle` diagnostics in ~15 ms on CPU.
+Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `427K`-parameter neural network in pure NumPy (`~15 ms` on CPU) across 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
+
+- **Weight-space programmed:** No training data or gradient descent is used. Every weight in `weights.npz` is compiled directly from explicit mathematical circuits in `compile.py`.
+- **System One judgment:** No text is generated. A single forward pass returns calibrated `0.0–1.0` hygiene scores, 6 style sub-scores, a style archetype, and line-level `Squiggle` diagnostics.
+
+## Example Output
+
+```text
+example.py
+  score: 0.017  rl_hygiene: 0.040  style: slop (98%)
+    flatness        #####........... 0.30
+    naming          ##############.. 0.91
+    simplicity      ##############.. 0.91
+    comments        ########........ 0.48
+    error_handling  ########........ 0.48
+    layout          #############... 0.81
+
+  4 squiggle(s):
+     2 |     # Validate user items
+       |     ~~~~~~~~~~~~~~~~~~~~~ [noisy_comment 0.89] Comment restates code or leaves TODO/lint noise
+     8 |                     if x.score > 0:
+       |                     ~~~~~~~~~~~~~~~ [deep_nesting 0.88] Deep nesting; flatten with guard clauses
+     9 |                         return run(x)
+       |                         ~~~~~~~~~~~~~ [deep_nesting 0.88] Deep nesting; flatten with guard clauses
+    12 |     except Exception:
+       |     ~~~~~~~~~~~~~~~~~ [swallowed_error 0.88] Ignored error or silent fallback value
+```
 
 ## Quickstart
 
-Run directly without installation via `uvx`, or install with `pip`:
+Run directly without installing via `uvx`, or install with `pip`:
 
 ```bash
 uvx --from git+https://github.com/brianbell-x/codehygiene codehygiene .
@@ -40,20 +66,29 @@ issues = codehygiene.lint(code, threshold=0.55)      # list[Squiggle]
 reward = codehygiene.rl_reward(code, tests_passed=True, weight=0.25)
 ```
 
-`rl_reward` is multiplicatively gated by functional correctness: `0.0` is returned whenever `tests_passed <= 0`, preventing reward hacking on broken but well-formatted rollouts; passing rollouts receive `tests_passed * (1.0 + weight * blend(score, rl_hygiene))` in `[1.0, 1.25]`.
+In RL coding loops (`GRPO`, `PPO`, verifiers), `rl_reward` is gated by test pass rate: broken solutions (`tests_passed <= 0`) always receive `0.0` so models cannot reward-hack by emitting clean-looking non-functional code, while passing solutions receive `1.0` to `1.25` based on code hygiene.
+
+## How It Works
+
+All inference happens in `_forward()` (`codehygiene/__init__.py`) using standard matrix multiplies, 1D convolutions, and attention—with zero regexes, tokenizers, or AST parsers:
+
+1. **2D ASCII Byte Grid (`encode_byte_grid`):** Source text is placed into a `(lines × 128 columns)` grid of 7-bit ASCII bytes, preserving visual indentation, alignment, and line width.
+2. **Left-to-Right String & Comment Masking (`Block 0`):** Causal prefix matrices scan across each line to track quote parity (`"` / `'`) and comment openers (`//`, `# `, `-- `, `/* */`), preventing words inside strings or comments from misfiring code detectors.
+3. **Pattern Convolutions & Word-Stem Sketches (`Block 1`):** Parallel `k=3, 7, 13` convolutions detect control-flow branches, chained operators, and ceremonial naming (`*Factory`, `*Manager`), while 40 SimHash filters sketch 4-letter identifier stems separately in code and comments.
+4. **Cross-Line Sink Attention & Readout (`Blocks 2–3`):** Multi-head attention compares each line against neighbors (`±32` lines) and file-wide indentation statistics—catching comments whose stems repeat the next line's code (`noisy_comment`), swallowed error handlers (`swallowed_error`), duplicated blocks (`duplicate_block`), and deep pyramids (`deep_nesting`)—before pooling into file-level scores.
 
 ## Output Schema (`--json` / `Result.to_dict()`)
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `score` | `float` `[0, 1]` | Overall aesthetic judgment (`>= 0.70` clean, `0.40–0.70` mixed, `< 0.40` degraded). |
-| `rl_hygiene` | `float` `[0, 1]` | Anti-slop and structural hygiene signal tailored for RL rollout shaping. |
-| `scores` | `dict[str, float]` | Six `[0, 1]` spectra: `flat_flow`, `terse_naming`, `direct_idiom`, `comment_signal`, `error_discipline`, `visual_rhythm`. |
-| `archetype` | `str` | Top style class: `austere_systems`, `clean_modern`, `enterprise_ceremony`, `clever_dense`, or `rl_ai_slop`. |
-| `archetype_probs` | `dict[str, float]` | Calibrated probability distribution summing to `1.0` across all 5 archetypes. |
-| `squiggles` | `list[dict]` | `{line, col_start, col_end, probability, kind, message}` spans exceeding `threshold`. |
+| `score` | `float` `[0, 1]` | Overall aesthetic score (`>= 0.70` clean, `0.40–0.70` mixed, `< 0.40` degraded). |
+| `rl_hygiene` | `float` `[0, 1]` | Anti-slop structural hygiene signal tailored for RL reward shaping. |
+| `scores` | `dict[str, float]` | Six `[0, 1]` sub-scores: `flatness`, `naming`, `simplicity`, `comments`, `error_handling`, `layout`. |
+| `archetype` | `str` | Closest style profile: `minimal`, `clean`, `enterprise`, `dense`, or `slop`. |
+| `archetype_probs` | `dict[str, float]` | Probability distribution summing to `1.0` across all 5 style profiles. |
+| `squiggles` | `list[dict]` | `{line, col_start, col_end, probability, kind, message}` diagnostics above `threshold`. |
 
-Diagnostic `kind` values: `nesting_pyramid`, `naming_ceremony`, `narrator_comment`, `defensive_slop`, `clever_chaining`, `special_case_wart`, `copy_paste_clone`, `rhythm_clash`.
+Squiggle `kind` values: `deep_nesting`, `poor_naming`, `noisy_comment`, `swallowed_error`, `dense_line`, `special_casing`, `duplicate_block`, `cramped_layout`.
 
 ## Benchmarks
 
@@ -70,7 +105,7 @@ Evaluated with zero training across a 54-slice production canon (`27` files, `11
 
 ## Build Weights
 
-All 53 float32 tensors in `codehygiene/weights.npz` are deterministically generated from closed-form circuits in `compile.py`:
+All 53 float32 tensors in `codehygiene/weights.npz` are deterministically generated from `compile.py`:
 
 ```bash
 python compile.py

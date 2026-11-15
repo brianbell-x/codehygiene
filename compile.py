@@ -1,4 +1,18 @@
-"""Closed-form Weight-Space Program compiling polyglot parameters into weights.npz."""
+"""Closed-form Weight-Space Program compiling polyglot circuits into weights.npz.
+
+Architecture & Residual Layout (Z has 192 channels per line):
+  - Block 0 (_build_block0): Maps (L, 128) ASCII bytes + column positions into 52 per-cell
+    channels (HC_*), using causal prefix matrices to mask string literals (16-quote sawtooth)
+    and polyglot comments (//, /* */, # , -- ) left-to-right across each line.
+  - Block 1 (_build_block1): Runs k=3, 7, 13 1D convolutions for operators, control-flow
+    keywords, and ceremonial suffixes, plus 40 Rademacher 4-gram SimHash filters (_sketch_bank)
+    for live code (Z[112:152]) and inline comments (Z[152:192]), projecting line stats into Z[0:40].
+  - Block 2 (_build_block2_and_heads): Two cross-line sink-attention + MLP passes populate
+    relational context in Z[40:59], bounded [0, 1] issue flags in Z[64:77], and neighborhood-
+    smoothed flags in Z[80:86].
+  - Block 3 (_build_block2_and_heads): Projects Z into 8 per-line squiggle probabilities (sq_w)
+    and pools active lines into 31 document logits (2 scores, 6x4 sub-scores, 5 style classes).
+"""
 
 from __future__ import annotations
 
@@ -32,6 +46,7 @@ def _sub_filter(
     code: bool = True, comm: bool = False, lead: int = 0, no_str: bool = True,
     wl: int = 0, wr: int = 0, cs: int = 0, gain: float = 12.5,
 ) -> None:
+    """Write an exact ASCII bit-template into conv kernel channel `ch` for substring `pat`."""
     s0 = (w.shape[0] - (len(pat) + wl + wr)) // 2 + wl
     w[:, :, ch] = 0.0
     th = float(len(pat))
@@ -69,6 +84,7 @@ def _encode_4g(word: str) -> np.ndarray:
 
 
 def _sketch_bank() -> tuple[np.ndarray, np.ndarray]:
+    """Build 40 near-orthogonal 4-char SimHash filters (0..39: live code, 40..79: comments)."""
     sw, sb = np.zeros((5, N_HC, 80), dtype=np.float32), np.zeros((80,), dtype=np.float32)
     stop_v = [_encode_4g(w) for w in _STOP]
     rng = np.random.RandomState(20261115)
@@ -97,6 +113,7 @@ def _sketch_bank() -> tuple[np.ndarray, np.ndarray]:
 
 
 def _build_block0(p: dict[str, np.ndarray]) -> None:
+    """Compile byte/column embeddings and left-to-right quote & comment masking circuits."""
     tok = np.zeros((128, 46), dtype=np.float32)
     tok[1:, 0] = 1.0
     tok[33:, 1] = 1.0
@@ -260,6 +277,8 @@ _K13_CODE = (
 
 
 def _build_block1(p: dict[str, np.ndarray]) -> None:
+    """Compile k=3, 7, 13 lexical convolutions, SimHash bank, and line-level feature MLP."""
+    # k=3: snake_case/camelCase transitions, isolated single-letter identifiers, ternaries, operators
     c3_w, c3_b = np.zeros((3, N_HC, 64), dtype=np.float32), np.zeros((64,), dtype=np.float32)
     c3_w[[0, 1, 2], [HC_LO, HC_UND, HC_LO], 0] = 2.0
     c3_w[[0, 1], [HC_LO, HC_UP], 1] = 2.0
@@ -400,12 +419,14 @@ def _build_block1(p: dict[str, np.ndarray]) -> None:
 
 
 def _build_block2_and_heads(p: dict[str, np.ndarray]) -> None:
+    """Compile cross-line sink-attention heads, [0, 1] issue clamps, and System One readout."""
     d0 = MAX_REL_DIST
     a1_wq, a1_wk = np.zeros((192, 128), dtype=np.float32), np.zeros((192, 128), dtype=np.float32)
     a1_wv, a1_wo = np.zeros((192, 96), dtype=np.float32), np.zeros((96, 192), dtype=np.float32)
     a1_br = np.full((8, 2 * d0 + 1), -1e4, dtype=np.float32)
     a1_bs = np.array([4.5, 1.2, 1.5, 2.5, 8.9, 2.0, -12.0, -12.0], dtype=np.float32)
 
+    # Head 0: comment-to-next-line code SimHash overlap (detects comments restating code on L+1..L+2)
     q_mat, _ = np.linalg.qr(np.random.RandomState(777).randn(40, 40))
     proj = (q_mat[:, :16] * np.sqrt(40.0 / 16.0)).astype(np.float32)
     a1_wq[152:192, :16] = proj * float(np.sqrt(60.0))
@@ -413,12 +434,14 @@ def _build_block2_and_heads(p: dict[str, np.ndarray]) -> None:
     a1_br[0, [d0 + 1, d0 + 2]] = [0.0, -1.2]
     a1_wv[1, 0] = a1_wo[0, 40] = 1.0
 
+    # Head 1: try/catch/except opener matching nearby real handler vs. empty/fallback body (L..L+3)
     a1_wq[20, [16, 17]] = [float(np.sqrt(32.0)), float(np.sqrt(16.0))]
     a1_wk[[21, 22], [16, 17]] = [float(np.sqrt(32.0)), float(np.sqrt(16.0))]
     a1_br[1, d0 : d0 + 4] = 0.0
     a1_wv[[21, 22], [12, 13]] = 1.0
     a1_wo[[12, 13], [41, 42]] = 1.0
 
+    # Head 2: causal lookback (L-8..L) counting enclosing branch openers vs. guard-clause exits
     a1_br[2, d0 - 8 : d0 + 1] = 0.0
     a1_wv[[6, 7, 11, 13, 14, 32, 36], range(24, 31)] = [1, 1.5, 1, 1, 1, 1, 1]
     a1_wo[[24, 25], 43] = [0.8, 1.0]
@@ -426,29 +449,35 @@ def _build_block2_and_heads(p: dict[str, np.ndarray]) -> None:
     a1_wo[[27, 28, 29], 45] = [1.0, 0.8, 0.8]
     a1_wo[30, 51] = 1.0
 
+    # Head 3: local window (L-9..L+9) measuring statement density vs. blank/comment paragraph breaks
     a1_br[3, d0 - 9 : d0 + 10] = 0.0
     a1_wv[[29, 34, 8], [36, 37, 38]] = 1.0
     a1_wo[[36, 37, 38], [46, 47, 50]] = 1.0
 
+    # Head 4: distant code-to-code SimHash matching (|offset| >= 6) for duplicate logic blocks
     a1_wq[112:152, 64:80] = proj * 8.0
     a1_wk[112:152, 64:80] = proj * 8.0
     a1_br[4, np.abs(np.arange(-d0, d0 + 1)) >= 6] = 0.0
     a1_wv[31, 48] = a1_wo[48, 48] = 1.0
 
+    # Head 5: local window (L-6..L+6) pooling stacked hardcoded equality edge-case branches
     a1_br[5, d0 - 6 : d0 + 7] = 0.0
     a1_wv[[15, 35], 60] = [1.0, -2.5]
     a1_wo[60, 49] = 1.0
 
+    # Head 6: file-wide mean pooling to infer naming conventions and 2- vs 3/4-space indent scale
     a1_br[6, :] = 0.0
     a1_wv[[18, 19, 10, 9, 8], [72, 73, 74, 75, 76]] = 1.0
     a1_wo[[72, 73, 74, 75, 76], [52, 53, 56, 57, 58]] = 1.0
 
+    # Head 7: local window (L-3..L+3) pooling dense chaining and naming bloat clusters
     a1_br[7, d0 - 3 : d0 + 4] = 0.0
     a1_wv[[24, 25, 16], [84, 84, 85]] = 1.0
     a1_wo[[84, 85], [54, 55]] = 1.0
     p["attn1_wq"], p["attn1_wk"], p["attn1_wv"], p["attn1_wo"] = a1_wq, a1_wk, a1_wv, a1_wo
     p["attn1_brel"], p["attn1_bsink"] = a1_br, a1_bs
 
+    # Paired ReLU clamps ReLU(x) - ReLU(x - 1) write bounded [0, 1] issue flags into Z[64..76]
     cm1_w, cm1_b = np.zeros((192, 96), dtype=np.float32), np.zeros((96,), dtype=np.float32)
     cm1_2w, cm1_2b = np.zeros((96, 192), dtype=np.float32), np.zeros((192,), dtype=np.float32)
     c1_rules = (
@@ -515,6 +544,7 @@ def _build_block2_and_heads(p: dict[str, np.ndarray]) -> None:
     cm2_2w[[6, 7], 81] = [1.0, -1.0]
     p["cmlp2_w"], p["cmlp2_b"], p["cmlp2_2_w"], p["cmlp2_2_b"] = cm2_w, cm2_b, cm2_2w, cm2_2b
 
+    # Block 3 readout: 8 squiggle heads (sq_w) + gated document pooling into 31 System One logits
     regs = [64, 65, 66, 67, 68, 69, 74, 71]
     sq_w, sq_b = np.zeros((192, 8), dtype=np.float32), np.full((8,), -2.7, dtype=np.float32)
     sq_w[regs, range(8)] = [4.2, 4.6, 4.8, 4.7, 4.7, 4.3, 4.8, 4.3]

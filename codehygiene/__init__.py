@@ -32,24 +32,24 @@ _SKIP_DIRS = frozenset({
 })
 
 _SPEC = (
-    ("nesting_pyramid", "Deep nested branching; prefer guard clauses"),
-    ("naming_ceremony", "Ceremonial or cryptic identifier naming"),
-    ("narrator_comment", "Comment restates code or leaves TODO noise"),
-    ("defensive_slop", "Swallowed error or fallback slop"),
-    ("clever_chaining", "Dense chaining, nested ternary, or long line"),
-    ("special_case_wart", "Stacked hardcoded edge-case branch"),
-    ("copy_paste_clone", "Duplicated multi-line logic block"),
-    ("rhythm_clash", "Unbroken statement wall or jagged indent"),
+    ("deep_nesting", "Deep nesting; flatten with guard clauses"),
+    ("poor_naming", "Over-abstracted (*Factory/*Manager) or cryptic name"),
+    ("noisy_comment", "Comment restates code or leaves TODO/lint noise"),
+    ("swallowed_error", "Ignored error or silent fallback value"),
+    ("dense_line", "Long line, chained calls, or nested ternary"),
+    ("special_casing", "Stacked hardcoded special-case branches"),
+    ("duplicate_block", "Duplicated logic block"),
+    ("cramped_layout", "Unbroken statement wall or inconsistent indent"),
 )
 SQUIGGLE_KINDS = tuple(k for k, _ in _SPEC)
 SQUIGGLE_MESSAGES = dict(_SPEC)
 SCORE_NAMES = (
-    "flat_flow", "terse_naming", "direct_idiom",
-    "comment_signal", "error_discipline", "visual_rhythm",
+    "flatness", "naming", "simplicity",
+    "comments", "error_handling", "layout",
 )
 ARCHETYPE_NAMES = (
-    "austere_systems", "clean_modern", "enterprise_ceremony",
-    "clever_dense", "rl_ai_slop",
+    "minimal", "clean", "enterprise",
+    "dense", "slop",
 )
 _LEVELS = np.array([0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0], dtype=np.float32)
 _ANSI = ("\033[1m", "\033[2m", "\033[33m", "\033[36m", "\033[32m", "\033[31m", "\033[0m")
@@ -120,6 +120,7 @@ def _sink_attn(
     z: np.ndarray, wq: np.ndarray, wk: np.ndarray,
     wv: np.ndarray, wo: np.ndarray, b_rel: np.ndarray, b_sink: np.ndarray,
 ) -> np.ndarray:
+    """Multi-head relative-offset attention across lines with an unmatched-query sink logit."""
     n_l, n_h = z.shape[0], b_sink.shape[0]
     dk = wq.shape[1] // n_h
     q, k, v = ((z @ w).reshape(n_l, n_h, -1).transpose(1, 0, 2) for w in (wq, wk, wv))
@@ -133,6 +134,7 @@ def _sink_attn(
 
 
 def encode_byte_grid(code: str, max_lines: int = 512) -> tuple[np.ndarray, list[str]]:
+    """Convert raw source text into a (lines, 128) uint8 grid of 7-bit ASCII codes."""
     lines = (code.expandtabs(2).splitlines() or [""])[:max_lines]
     grid = np.zeros((len(lines), MAX_COLS), dtype=np.uint8)
     for i, ln in enumerate(lines):
@@ -143,6 +145,7 @@ def encode_byte_grid(code: str, max_lines: int = 512) -> tuple[np.ndarray, list[
 
 
 def _forward(p: dict[str, np.ndarray], x: np.ndarray) -> tuple[np.ndarray, ...]:
+    # Block 0: character + column embeddings and left-to-right string/comment state masks -> hc (L, W, 52)
     wc = x.shape[1]
     e = p["tok_emb"][x] + p["col_emb"][None, :wc, :]
     p0 = _relu(_conv1d(e, p["pre_conv3_w"], p["pre_conv3_b"]))
@@ -151,6 +154,7 @@ def _forward(p: dict[str, np.ndarray], x: np.ndarray) -> tuple[np.ndarray, ...]:
     c2 = p["W_causal2"][:wc, :wc] @ (g1 @ p["pref2_proj"])
     hc = _relu(np.concatenate([e, p0, g1, c2], axis=-1) @ p["col_fuse_w"] + p["col_fuse_b"])
 
+    # Block 1: k=3/7/13 lexical convolutions + 40-dim code/comment SimHash sketches -> z (L, 192)
     k3 = _relu(_conv1d(hc, p["conv3_w"], p["conv3_b"])).sum(axis=1)
     k7 = _relu(_conv1d(hc, p["conv7_w"], p["conv7_b"])).sum(axis=1)
     k13 = _relu(_conv1d(hc, p["conv13_w"], p["conv13_b"])).sum(axis=1)
@@ -162,6 +166,7 @@ def _forward(p: dict[str, np.ndarray], x: np.ndarray) -> tuple[np.ndarray, ...]:
     ml = _relu(u @ p["lmlp1_w"] + p["lmlp1_b"]) @ p["lmlp2_w"] + p["lmlp2_b"]
     z = np.concatenate([ml, _l2_norm(skb[:, :40]), _l2_norm(skb[:, 40:])], axis=-1)
 
+    # Block 2: two cross-line sink-attention + context-MLP passes over [-32..+32] line offsets
     for k in ("1", "2"):
         z = z + _sink_attn(
             z, p[f"attn{k}_wq"], p[f"attn{k}_wk"], p[f"attn{k}_wv"],
@@ -169,6 +174,7 @@ def _forward(p: dict[str, np.ndarray], x: np.ndarray) -> tuple[np.ndarray, ...]:
         )
         z = z + _relu(z @ p[f"cmlp{k}_w"] + p[f"cmlp{k}_b"]) @ p[f"cmlp{k}_2_w"] + p[f"cmlp{k}_2_b"]
 
+    # Block 3: per-line squiggle probabilities + active-line pooling into System One heads
     line_p = _sigmoid(z @ p["sq_w"] + p["sq_b"])
     gate = _sigmoid(z @ p["pool_gate_w"] + p["pool_gate_b"])
     z_mean = (z * gate).sum(axis=0) / (gate.sum(axis=0) + 1e-5)
@@ -239,12 +245,11 @@ def render_report(
     out = [
         f"{b}{label}{z}",
         f"  score: {sc}{res.score:.3f}{z}  rl_hygiene: {c}{res.rl_hygiene:.3f}{z}  "
-        f"archetype: {b}{res.archetype}{z} ({pct:.0f}%)",
-        "  spectra:",
+        f"style: {b}{res.archetype}{z} ({pct:.0f}%)",
     ]
     for k, v in res.scores.items():
         n = int(round(max(0.0, min(1.0, v)) * 16))
-        out.append(f"    {k:17s} {'#' * n + '.' * (16 - n)} {v:.2f}")
+        out.append(f"    {k:15s} {'#' * n + '.' * (16 - n)} {v:.2f}")
     if not res.squiggles:
         return "\n".join([*out, f"\n  {g}ok - no squiggles (threshold {thresh:.2f}){z}"])
 
