@@ -1,0 +1,96 @@
+:root {
+  color-scheme: light;
+
+  /* Neutral Canvas, Elevated Card, Recessed Code Well */
+  --bg-canvas: #f8f9fb;
+  --bg-card: #ffffff;
+  --bg-editor: #ffffff;
+  --bg-subtle: #f3f4f6;
+  --bg-hover: #e5e7eb;
+  --bg-raised: #ffffff;
+  --border: #e5e7eb;
+  --border-strong: #d1d5db;
+
+  /* Primary Action Button (Inverted Ink) */
+  --btn-primary-bg: #111318;
+  --btn-primary-hover: #262a33;
+  --btn-primary-ink: #ffffff;
+
+  /* Neutral Ink Hierarchy (WCAG AA >= 5.2:1) */
+  --ink: #111318;
+  --ink-secondary: #4b5563;
+  --ink-muted: #666d7a;
+  --ink-faint: #d1d5db;
+
+  /* Single Semantic Red; Green Reserved for Diff Additions & Copy Checks */
+  --red: #dc2626;
+  --bg-error: rgba(220, 38, 38, 0.06);
+  --border-error: rgba(220, 38, 38, 0.28);
+  --bg-line-focus: rgba(17, 19, 24, 0.045);
+  --bg-selection: rgba(17, 19, 24, 0.12);
+  --bg-diff-del: rgba(220, 38, 38, 0.07);
+  --bg-diff-del-word: rgba(220, 38, 38, 0.18);
+  --bg-diff-add: rgba(22, 163, 74, 0.08);
+  --bg-diff-add-word: rgba(22, 163, 74, 0.2);
+  --green-diff: #15803d;
+
+  --squiggle-wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='4' viewBox='0 0 8 4'%3E%3Cpath d='M0 3 Q2 0.6 4 3 T8 3' fill='none' stroke='%23dc2626' stroke-width='1.15' stroke-linecap='round'/%3E%3C/svg%3E");
+
+  /* Two Type Families, Coherent Scale */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-score: 32px;
+  --text-hero: 44px;
+
+  --container-max: 960px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --shadow-card: 0 1px 3px rgba(17, 19, 24, 0.04);
+  --shadow-seg: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Deep Canvas, Stepped Card, Crisp Recessed Wells */
+  --bg-canvas: #090b0e;
+  --bg-card: #11141a;
+  --bg-editor: #0c0e12;
+  --bg-subtle: #171b22;
+  --bg-hover: #20252f;
+  --bg-raised: #272d38;
+  --border: rgba(255, 255, 255, 0.085);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  /* Primary Action Button (Inverted Crisp Light) */
+  --btn-primary-bg: #eceef2;
+  --btn-primary-hover: #ffffff;
+  --btn-primary-ink: #0c0e12;
+
+  /* Crisp Neutral Ink Hierarchy (WCAG AA >= 5.3:1) */
+  --ink: #eceef2;
+  --ink-secondary: #9ca3b0;
+  --ink-muted: #7f8796;
+  --ink-faint: #2c313c;
+
+  --red: #f87171;
+  --bg-error: rgba(248, 113, 113, 0.09);
+  --border-error: rgba(248, 113, 113, 0.32);
+  --bg-line-focus: rgba(255, 255, 255, 0.05);
+  --bg-selection: rgba(255, 255, 255, 0.16);
+  --bg-diff-del: rgba(248, 113, 113, 0.1);
+  --bg-diff-del-word: rgba(248, 113, 113, 0.24);
+  --bg-diff-add: rgba(74, 222, 128, 0.09);
+  --bg-diff-add-word: rgba(74, 222, 128, 0.22);
+  --green-diff: #4ade80;
+
+  --squiggle-wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='4' viewBox='0 0 8 4'%3E%3Cpath d='M0 3 Q2 0.6 4 3 T8 3' fill='none' stroke='%23f87171' stroke-width='1.15' stroke-linecap='round'/%3E%3C/svg%3E");
+
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-seg: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.08);
+}

@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>codehygiene — Score any codebase</title>
+    <meta
+      name="description"
+      content="Score any public GitHub repository or source file for readability and AI slop in your browser with a 13.0 KiB 1.58-bit ternary neural model."
+    />
+    <script>
+      (function () {
+        var saved = null;
+        try {
+          saved = localStorage.getItem("ch-theme");
+        } catch (_) {}
+        var dark =
+          saved === "dark" ||
+          (!saved && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+        if (new URLSearchParams(window.location.search).get("repo")) {
+          document.documentElement.setAttribute("data-boot-repo", "1");
+        }
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <a
+            class="wordmark-link"
+            href="https://github.com/brianbell-x/codehygiene"
+            target="_blank"
+            rel="noopener noreferrer"
+          >codehygiene</a>
+
+          <button
+            type="button"
+            class="icon-btn"
+            id="theme-toggle-btn"
+            aria-label="Toggle color theme"
+          >
+            <svg
+              class="icon-sun"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+            </svg>
+            <svg
+              class="icon-moon"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="page-main">
+        <section class="hero-section" id="hero-section">
+          <h1 class="hero-title">Score any codebase</h1>
+          <p class="hero-subtitle">
+            Turn any GitHub repository into a line-level readability report. Catch deep
+            nesting, narrator comments, swallowed errors, and AI slop locally in your browser.
+          </p>
+        </section>
+
+        <section class="ingest-card" aria-label="Repository input">
+          <form id="repo-form" role="search" novalidate>
+            <div class="ingest-primary-row">
+              <div class="repo-input-wrap">
+                <input
+                  type="text"
+                  inputmode="url"
+                  size="1"
+                  class="repo-input"
+                  id="repo-input"
+                  placeholder="https://github.com/owner/repo"
+                  aria-label="GitHub repository URL or owner/repo"
+                  spellcheck="false"
+                  autocapitalize="off"
+                  autocomplete="off"
+                  autocorrect="off"
+                />
+                <button
+                  type="button"
+                  class="input-clear-btn"
+                  id="repo-clear-btn"
+                  aria-label="Clear repository"
+                  title="Clear repository"
+                  hidden
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M18 6 6 18M6 6l12 12"></path>
+                  </svg>
+                </button>
+              </div>
+
+              <button type="submit" class="primary-btn" id="repo-submit-btn">
+                Score
+              </button>
+            </div>
+
+            <div class="ingest-options-row">
+              <div class="pattern-group">
+                <select
+                  id="filter-mode"
+                  class="pattern-select"
+                  aria-label="Path filter mode"
+                >
+                  <option value="exclude">Exclude</option>
+                  <option value="include">Include</option>
+                </select>
+                <input
+                  type="text"
+                  size="1"
+                  id="filter-pattern"
+                  class="pattern-input"
+                  placeholder="*.test.*, docs/, examples/"
+                  aria-label="Comma-separated glob or path patterns"
+                  spellcheck="false"
+                  autocapitalize="off"
+                  autocomplete="off"
+                />
+              </div>
+
+              <div class="threshold-group">
+                <label for="threshold-range" class="option-label">
+                  Threshold: <strong class="mono-strong" id="threshold-val">0.55</strong>
+                </label>
+                <input
+                  type="range"
+                  class="native-range"
+                  id="threshold-range"
+                  min="0.25"
+                  max="0.85"
+                  step="0.05"
+                  value="0.55"
+                />
+              </div>
+
+              <label class="inline-check" for="exclude-tests-check">
+                <input type="checkbox" id="exclude-tests-check" />
+                <span>Exclude tests</span>
+              </label>
+            </div>
+
+            <div class="ingest-examples-row">
+              <span class="examples-label">Try these example repositories:</span>
+              <div class="examples-chips" id="example-repo-chips"></div>
+            </div>
+
+            <p class="repo-error" id="repo-error" role="alert" hidden></p>
+          </form>
+
+          <div class="card-progress" id="topbar-progress" hidden aria-hidden="true">
+            <div class="card-progress-fill" id="topbar-progress-fill"></div>
+          </div>
+          <span class="sr-only" id="repo-live-region" aria-live="polite"></span>
+        </section>
+
+        <div class="helper-line" id="helper-line">
+          <span>Scored client-side with zero server uploads</span>
+          <span class="helper-sep" aria-hidden="true">·</span>
+          <button type="button" class="text-link-btn" id="toggle-snippet-btn">
+            Paste a snippet or compare Before → After examples
+          </button>
+        </div>
+
+        <section
+          class="results-card"
+          id="repo-results-card"
+          aria-label="Repository hygiene summary"
+          hidden
+        >
+          <div class="results-top-grid">
+            <div class="summary-col">
+              <div class="section-head">
+                <h2 class="section-title">Summary</h2>
+                <a
+                  id="repo-ext-link"
+                  class="ext-repo-link"
+                  href="https://github.com/brianbell-x/codehygiene"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >owner/repo ↗</a>
+              </div>
+
+              <div class="summary-well">
+                <div class="score-line">
+                  <span class="score-num" id="repo-hero-score">—</span>
+                  <span class="score-archetype" id="repo-meta-summary">—</span>
+                </div>
+
+                <div class="dims-grid" id="repo-subscores-body"></div>
+
+                <div class="repo-kinds-section">
+                  <div class="block-head">
+                    <span class="block-title" id="repo-diag-heading">Issues by kind</span>
+                  </div>
+                  <div class="diag-list" id="repo-kind-list"></div>
+                </div>
+              </div>
+
+              <div class="summary-actions">
+                <button type="button" class="secondary-btn" id="copy-prompt-btn">
+                  <span class="copy-icon-slot" aria-hidden="true">
+                    <svg
+                      class="icon-copy"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
+                      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+                    </svg>
+                    <svg
+                      class="icon-check"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M20 6 9 17l-5-5"></path>
+                    </svg>
+                  </span>
+                  <span>Copy fix prompt</span>
+                </button>
+
+                <button type="button" class="secondary-btn" id="repo-share-btn">
+                  <span class="copy-icon-slot" aria-hidden="true">
+                    <svg
+                      class="icon-copy"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                    </svg>
+                    <svg
+                      class="icon-check"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M20 6 9 17l-5-5"></path>
+                    </svg>
+                  </span>
+                  <span>Copy link</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="files-col">
+              <div class="section-head">
+                <h2 class="section-title">Directory &amp; file scores</h2>
+                <span class="section-meta" id="repo-files-meta">—</span>
+              </div>
+
+              <div class="files-well" id="repo-file-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <section
+          class="workbench-card"
+          id="workbench-card"
+          aria-label="Source file inspector"
+          hidden
+        >
+          <div class="control-bar">
+            <div class="example-cluster">
+              <select
+                class="example-select"
+                id="example-select"
+                aria-label="Active source file"
+              ></select>
+              <span class="file-score-pill" id="active-file-pill">0.00</span>
+              <button type="button" class="ghost-btn reset-btn" id="reset-btn" hidden>
+                Reset
+              </button>
+            </div>
+
+            <div class="seg-track" id="example-tabs" role="tablist" aria-label="Code state">
+              <button
+                type="button"
+                role="tab"
+                aria-selected="true"
+                class="seg-btn"
+                id="tab-before"
+                data-mode="before"
+              >
+                <span id="before-label">Before</span>
+                <span class="seg-score" id="before-score-pill">0.00</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected="false"
+                class="seg-btn"
+                id="tab-after"
+                data-mode="after"
+              >
+                <span>After</span>
+                <span class="seg-score" id="after-score-pill">0.00</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected="false"
+                class="seg-btn"
+                id="tab-diff"
+                data-mode="diff"
+              >
+                Diff
+              </button>
+            </div>
+
+            <div class="issue-stepper" id="issue-stepper" hidden>
+              <button
+                type="button"
+                class="ghost-btn"
+                id="prev-issue-btn"
+                aria-label="Previous issue (K)"
+                title="Previous issue (K)"
+              >
+                ↑ Prev
+              </button>
+              <button
+                type="button"
+                class="ghost-btn"
+                id="next-issue-btn"
+                aria-label="Next issue (J)"
+                title="Next issue (J)"
+              >
+                ↓ Next
+              </button>
+            </div>
+          </div>
+
+          <div class="workbench-grid">
+            <div class="editor-pane">
+              <div class="editor-well" id="editor-view">
+                <div class="editor-gutter" id="editor-gutter" aria-hidden="true"></div>
+                <div class="editor-stage">
+                  <pre class="code-mirror" id="code-mirror" aria-hidden="true"></pre>
+                  <textarea
+                    class="code-input"
+                    id="code-input"
+                    aria-label="Source code editor"
+                    placeholder="Paste Python, TypeScript, JS, Rust, Go, C/C++, Java, C#, Zig, or Lua..."
+                    spellcheck="false"
+                    autocapitalize="off"
+                    autocomplete="off"
+                    autocorrect="off"
+                  ></textarea>
+                </div>
+              </div>
+
+              <div class="diff-well" id="diff-view" hidden>
+                <div class="diff-scroll" id="diff-body"></div>
+              </div>
+            </div>
+
+            <aside class="inspector" aria-label="Line diagnostics">
+              <div class="panel-block" id="snippet-score-block">
+                <div class="score-line">
+                  <span class="score-num" id="hero-score">—</span>
+                  <span class="score-archetype" id="archetype-summary">—</span>
+                </div>
+                <div class="dims-grid snippet-dims" id="subscores-body"></div>
+              </div>
+
+              <div class="panel-block diag-block">
+                <div class="block-head">
+                  <span class="block-title" id="diag-count-text">Diagnostics</span>
+                  <span class="key-hint" id="diag-hint-text">J/K</span>
+                </div>
+                <div class="diag-list" id="diag-list"></div>
+              </div>
+
+              <details class="fold-block" id="xray-details">
+                <summary class="fold-summary">RL reward &amp; Circuit X-ray</summary>
+                <div class="fold-body">
+                  <label class="check-row" for="tests-checkbox">
+                    <input type="checkbox" id="tests-checkbox" checked />
+                    <span>Unit tests passing</span>
+                  </label>
+                  <div class="control-row">
+                    <span class="control-label">RL reward</span>
+                    <span class="mono-val" id="rl-reward-val">1.000</span>
+                  </div>
+                  <code class="formula-note">
+                    tests ? 1 + 0.25 * 0.5 * (score + rl_hygiene) : 0
+                  </code>
+
+                  <div class="seg-track xray-tabs" role="tablist" aria-label="Circuit layer">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected="true"
+                      class="seg-btn"
+                      id="tab-mask"
+                      data-xray="mask"
+                    >
+                      Block 0 mask
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected="false"
+                      class="seg-btn"
+                      id="tab-probs"
+                      data-xray="probs"
+                    >
+                      Block 3 probs
+                    </button>
+                  </div>
+                  <div id="xray-body"></div>
+                </div>
+              </details>
+            </aside>
+          </div>
+        </section>
+      </main>
+
+      <footer class="statusbar">
+        <div class="statusbar-inner">
+          <button
+            type="button"
+            class="install-cmd"
+            id="copy-install-btn"
+            aria-label="Copy npx skills install command"
+          >
+            <code>npx skills add brianbell-x/codehygiene -g</code>
+            <span class="copy-icon-slot" aria-hidden="true">
+              <svg
+                class="icon-copy"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect>
+                <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path>
+              </svg>
+              <svg
+                class="icon-check"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M20 6 9 17l-5-5"></path>
+              </svg>
+            </span>
+          </button>
+
+          <span class="status-meta" id="model-meta-text">
+            13.0 KiB · 1.58-bit ternary
+          </span>
+        </div>
+      </footer>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

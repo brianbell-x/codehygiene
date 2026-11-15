@@ -1,7 +1,7 @@
 """Closed-form 1.58-bit Ternary Weight-Space Program compiling circuits into weights.npz.
 
 Every 2D/3D weight, convolution, projection, causal, and embedding tensor in the model
-has entries strictly in {-1, 0, +1} (425,044 trits packed at 5 trits per uint8 byte,
+has entries strictly in {-1, 0, +1} (569,662 trits packed at 5 trits per uint8 byte,
 1.60 bits/weight), paired only with 1D per-output-channel scales and biases:
   - Block 0 (_build_block0): Maps (L, 128) ASCII bytes + column positions into 52 per-cell
     channels (HC_*), using causal prefix matrices and De Morgan closer gates to mask strings
@@ -9,7 +9,7 @@ has entries strictly in {-1, 0, +1} (425,044 trits packed at 5 trits per uint8 b
   - Block 1 (_build_block1): Runs k=3, 7, 13 {-1, 0, +1} integer-margin convolutions and
     40 SimHash stem filters (_sketch_bank) for live code and inline comments.
   - Block 2 (_build_block2_and_heads): Two cross-line sink-attention + MLP passes using
-    Paley Hadamard and Gram-fitted ternary projections populate Z[40:86].
+    Paley Hadamard and Gram-fitted ternary projections populate context and issue registers.
   - Block 3 (_build_block2_and_heads): Projects Z into 8 per-line squiggle probabilities
     and balanced-ternary System One document heads (31 logits).
 """
@@ -73,8 +73,9 @@ N_GATE1 = 50
 C2_IN_COMMENT, C2_IN_LINE_COMM, C2_IN_COMM_B, C2_IN_COMM_C = 0, 1, 2, 3
 N_PREF2 = 4
 
-# Line-level residual stream Z registers (192 channels per line)
-N_Z = 192
+# Line-level residual stream Z registers (226 channels per line)
+N_LMLP2 = 146
+N_Z = 226
 (
     Z_ACTIVE, Z_HAS_CODE, Z_PURE_COMMENT, Z_OPEN_NET, Z_INDENT,
     Z_DEPTH8, Z_DEPTH10, Z_DEPTH12, Z_ODD_INDENT, Z_MOD4_EQ2, Z_MOD4_EQ0,
@@ -90,7 +91,7 @@ N_Z = 192
     Z_SHORT_GOLF, Z_MAGIC_NUM,
 ) = range(20, 40)
 
-# Cross-line attention context registers (Z[40..63]) and SimHash slices (Z[112..192])
+# Cross-line attention context registers (Z[40..63]) and SimHash slices (Z[148..228])
 (
     Z_RESTATES_CODE, Z_NEAR_REAL_HANDLER, Z_NEAR_EMPTY_HANDLER,
     Z_ENCLOSING_DEPTH, Z_ENCLOSING_BRANCHES, Z_ENCLOSING_GUARDS,
@@ -102,20 +103,36 @@ N_Z = 192
     Z_FMOD42_DUP, Z_FODD_DUP, Z_FODD_SCALED,
 ) = range(40, 64)
 
-# Bounded [0, 1] per-line issue registers (Z[64..78]) and smoothed registers (Z[80..86])
+# Bounded [0, 1] per-line issue registers (Z[64..79]) and smoothed registers (Z[80..86])
 (
     Z_ISS_NESTING, Z_ISS_NAMING, Z_ISS_COMMENT, Z_ISS_ERROR,
     Z_ISS_DENSE, Z_ISS_SPECIAL, Z_RAW_CLONE, Z_ISS_LAYOUT,
     Z_RAW_CRYPTIC, Z_CLEAN_BONUS, Z_ISS_CLONE,
     Z_USES_WIDE_INDENT, Z_RAW_NESTING_2SP,
-    Z_WIDE_DUP_A, Z_WIDE_DUP_B,
-) = range(64, 79)
+    Z_WIDE_DUP_A, Z_WIDE_DUP_B, Z_NEXT_COAL,
+) = range(64, 80)
 (
     Z_SMOOTH_CLONE, Z_SMOOTH_NEST, Z_SMOOTH_CRYPTIC,
     Z_SMOOTH_SPECIAL, Z_SMOOTH_LAYOUT, Z_SMOOTH_NEST_2SP,
     Z_IS_INDENTED,
 ) = range(80, 87)
-Z_CODE_SKETCH, Z_COMM_SKETCH, SKETCH_DIM = 112, 152, 40
+
+# v0.4 static slop and paranoia registers (Z[111..145]; Z[87..110] hold helper_specs)
+(
+    Z_SIG_OPEN, Z_STATIC_TYPE, Z_SIG_VETO, Z_SEMI_ONLY,
+    Z_IF_LINE, Z_TYPE_HEDGE, Z_FAIL_FAST, Z_NEUTRAL_RET,
+    Z_HAS_ENV, Z_TWO_ENVS, Z_HAS_COALESCE, Z_DEV_DEFAULT,
+    Z_ENV_VETO, Z_HAS_ASSIGN, Z_ELISION_RAW, Z_LINE_COMM_VETO,
+    Z_COMM_FENCE, Z_COMM_STRONG_CUE, Z_COMM_ASSIGN, Z_COMM_FCALL,
+) = range(111, 131)
+(
+    Z_NEAR_COMM_FENCE, Z_TYPED_INTERNAL_SIG, Z_BOUNDARY_SIG_LINE,
+    Z_TYPE_HEDGE_IF, Z_ENV_CHAIN_1L, Z_ENV_DEV_1L,
+    Z_CONT_ENV, Z_CONT_DEV_DEF, Z_COMM_CODE_LINE,
+    Z_SMOOTH_COMM_CODE, Z_HAS_RECENT_TYPED_SIG, Z_NEAR_NEUTRAL_RET,
+    Z_NEXT_CONT_ENV, Z_NEXT_CONT_DEV, Z_NEXT_FAIL_FAST,
+) = range(131, 146)
+Z_CODE_SKETCH, Z_COMM_SKETCH, SKETCH_DIM = 146, 186, 40
 
 # Named attention head slices
 H0_QK = slice(0, 16)
@@ -149,6 +166,13 @@ def _pack_trits(arr: np.ndarray) -> np.ndarray:
     return (flat.reshape(-1, 5) * _POW3).sum(axis=1).astype(np.uint8)
 
 
+def _stamp_char(kernel: np.ndarray, pos: int, channel: int, char: str) -> None:
+    """Stamp 7-bit case-folded ASCII bit match for `char` into `(pos, channel)`."""
+    bits_on = (((ord(char.lower()) & 0x7F) >> _BITS7) & 1) == 1
+    kernel[pos, HC_BP + _BITS7[bits_on], channel] = 1
+    kernel[pos, HC_BN + _BITS7[~bits_on], channel] = 1
+
+
 def _sub_filter(
     kernel: np.ndarray,
     scale: np.ndarray,
@@ -180,9 +204,7 @@ def _sub_filter(
         thresh += 1
 
     for offset, char in enumerate(pattern):
-        bits_on = (((ord(char.lower()) & 0x7F) >> _BITS7) & 1) == 1
-        kernel[start + offset, HC_BP + _BITS7[bits_on], channel] = 1
-        kernel[start + offset, HC_BN + _BITS7[~bits_on], channel] = 1
+        _stamp_char(kernel, start + offset, channel, char)
         if cs and char.isalpha():
             hi_ch, lo_ch = (HC_UP, HC_LO) if char.isupper() else (HC_LO, HC_UP)
             kernel[start + offset, [hi_ch, lo_ch], channel] = [1, -1]
@@ -534,6 +556,22 @@ _K7_EXTENDED = (
     ("from ", 1, 0, 1, 1), ("use ", 1, 0, 1, 1), ("assert(", 0, 0, 0, 0),
 )
 
+_K7_V04_CODE = (
+    ("def ", 1, 0, 1, 0), (") ->", 0, 0, 0, 0), (": str", 0, 1, 1, 0),
+    (": int", 0, 1, 1, 0), (": bool", 0, 1, 1, 0), (": list", 0, 1, 0, 0),
+    (": dict", 0, 1, 0, 0), ("pub ", 1, 0, 1, 0), ("any", 1, 1, 1, 0),
+    ("Any", 1, 1, 1, 0), ("null", 1, 1, 1, 0), ("= None", 0, 1, 1, 0),
+    (" | ", 0, 0, 0, 0), (" or ", 0, 0, 1, 0), ("0.0.0.0", 0, 0, 0, 0),
+    ("_old", 0, 1, 0, 0), ("_bak", 0, 1, 0, 0),
+)
+
+_K7_V04_COMM = (
+    ("// ...", 0), ("# ...", 0), ("```", 0),
+    (">>>", 0), ("// }", 0), ("# def ", 1),
+    ("  def ", 1), ("# if ", 1), ("  if ", 1),
+    ("# for ", 1), ("  for ", 1),
+)
+
 _K13_PRIMARY = (
     ("Abstract", 1), ("Repository", 1), ("Configuration", 1), ("Controller", 1),
     ("Strategy", 1), ("Provider", 1), ("Processor", 1), ("Prototype", 1),
@@ -543,6 +581,30 @@ _K13_PRIMARY = (
 )
 
 _K13_EXTENDED = (("#include", 1), ("except Excep", 1), ("except BaseE", 1))
+
+_K13_V04_CODE = (
+    ("function ", 1, 0, 1), (": string", 0, 1, 1), (": number", 0, 1, 1),
+    (": boolean", 0, 1, 1), (": float", 0, 1, 1), (": Record<", 0, 0, 1),
+    ("export ", 1, 0, 1), ("public ", 1, 0, 1), ("unknown", 1, 1, 1),
+    (": object", 0, 1, 0), ("Optional", 1, 1, 1), ("undefined", 1, 1, 1),
+    ("Array.isArray", 0, 0, 1), ("isinstance(", 1, 0, 1), ("assert ", 1, 0, 1),
+    ("return 0", 1, 1, 1), ("return []", 1, 0, 1), ("return {}", 1, 0, 1),
+    ('return ""', 1, 0, 1), ("return ''", 1, 0, 1), ("return null", 1, 1, 1),
+    ("return None", 1, 1, 1), ("process.env", 1, 0, 1), (".meta.env", 0, 0, 1),
+    ("os.getenv(", 1, 0, 1), ("os.environ", 1, 0, 1), ("localhost", 0, 0, 0),
+    ("127.0.0.1", 0, 0, 0), ("sqlite://", 0, 0, 0), ("dev-secret", 0, 0, 0),
+    ("changeme", 0, 0, 0), (" as any", 0, 1, 1), ("as unknown", 1, 1, 1),
+    ("cast(Any", 1, 1, 1), ("_backup", 0, 1, 0), ("_deprecated", 0, 1, 0),
+    ("Deprecated", 0, 1, 1),
+)
+
+_K13_V04_COMM = (
+    ("pyright: ign", 0), ("biome-ignore", 0), ("rest of ", 0),
+    ("existing ", 0), ("placeholder", 0), ("unchanged", 0),
+    ("// const ", 1), ("  const ", 1), ("// let ", 1),
+    ("  let ", 1), ("// return ", 1), ("# return ", 1),
+    ("  return ", 1),
+)
 
 _CSUM_SPECS = (
     ("code_chars", HC_CNS, 1.0),
@@ -570,7 +632,7 @@ def _build_block1(
 ) -> dict[str, int]:
     """Compile {-1, 0, +1} k=3/7/13 convolutions, SimHash bank, and line-feature MLP."""
     feat: dict[str, int] = {}
-    n_csum, n_conv3, n_conv7, n_conv13 = 16, 64, 96, 64
+    n_csum, n_conv3, n_conv7, n_conv13 = 16, 64, 128, 86
     off_c3 = n_csum
     off_c7 = off_c3 + n_conv3
     off_c13 = off_c7 + n_conv7
@@ -605,7 +667,8 @@ def _build_block1(
     ):
         feat[name] = off_c3 + ch_i
 
-    for ch_i, pat in enumerate(("?.", "=>", "===", "{}", "||", "#", "??="), 5):
+    k3_code_pats = ("?.", "=>", "===", "{}", "||", "#", "??=")
+    for ch_i, pat in enumerate(k3_code_pats, 5):
         _sub_filter(conv3_w, conv3_s, conv3_b, ch_i, pat)
         feat[pat] = off_c3 + ch_i
 
@@ -620,11 +683,45 @@ def _build_block1(
     for ch_i, name in enumerate(("semi_or_eq", "depth_ge16", "depth_ge20", "func_call"), 12):
         feat[name] = off_c3 + ch_i
 
+    for ch_i, pat in enumerate(("??", "?:", "): ", " = "), 16):
+        _sub_filter(conv3_w, conv3_s, conv3_b, ch_i, pat)
+        feat[pat] = off_c3 + ch_i
+
+    ch_doc_blk, ch_semi_only, ch_typed_arr = 20, 21, 22
+    ch_comm_semi, ch_comm_fcall = 23, 24
+    conv3_w[1, [HC_FNS, HC_COMM, HC_SL_C], ch_doc_blk] = [1, 1, -1]
+    conv3_s[ch_doc_blk], conv3_b[ch_doc_blk] = 2.0, -3.0
+    conv3_w[1, [HC_SEM, HC_COMM, HC_STR], ch_semi_only] = [1, -1, -1]
+    conv3_s[ch_semi_only], conv3_b[ch_semi_only] = 2.0, -1.0
+
+    conv3_w[0, HC_ID, ch_typed_arr] = 1
+    _stamp_char(conv3_w, 1, ch_typed_arr, "[")
+    _stamp_char(conv3_w, 2, ch_typed_arr, "]")
+    conv3_w[1, [HC_COMM, HC_STR], ch_typed_arr] = -1
+    conv3_s[ch_typed_arr], conv3_b[ch_typed_arr] = 2.0, -29.0
+
+    conv3_w[1, [HC_SEM, HC_SL_C, HC_CODE], ch_comm_semi] = [1, 1, -1]
+    conv3_s[ch_comm_semi], conv3_b[ch_comm_semi] = 2.0, -3.0
+    conv3_w[[0, 1], [HC_ID, HC_LP], ch_comm_fcall] = 1
+    conv3_w[1, [HC_SL_C, HC_CODE], ch_comm_fcall] = [1, -1]
+    conv3_s[ch_comm_fcall], conv3_b[ch_comm_fcall] = 2.0, -5.0
+    custom_c3_names = (
+        "doc_or_block_comm", "semi_only", "typed_arr", "comm_semi", "comm_fcall",
+    )
+    for ch_i, name in enumerate(custom_c3_names, 20):
+        feat[name] = off_c3 + ch_i
+
+    k3_comm_pats = ("///", "//!", "===", "=>", "){", ") {", " = ")
+    for ch_i, pat in enumerate(k3_comm_pats, 25):
+        _sub_filter(conv3_w, conv3_s, conv3_b, ch_i, pat, code=False, comm=True)
+        feat[f"c:{pat}"] = off_c3 + ch_i
+
     conv7_w = np.zeros((7, N_HC, n_conv7), dtype=np.int8)
     conv7_s = np.ones((n_conv7,), dtype=np.float32)
     conv7_b = np.zeros((n_conv7,), dtype=np.float32)
-    str_bearing = {"|| '')", "strict'"}
-    for start_ch, group in ((0, _K7_PRIMARY), (60, _K7_EXTENDED)):
+    str_bearing = {"|| '')", "strict'", "0.0.0.0"}
+    k7_groups = ((0, _K7_PRIMARY), (60, _K7_EXTENDED), (85, _K7_V04_CODE))
+    for start_ch, group in k7_groups:
         for offset, (pat, wl, wr, cs, ld) in enumerate(group):
             ch_i = start_ch + offset
             _sub_filter(
@@ -650,7 +747,7 @@ def _build_block1(
             _sub_filter(conv7_w, conv7_s, conv7_b, ch_i, pat, code=False, comm=True)
             feat[pat] = off_c7 + ch_i
 
-    ch_short_lhs, ch_multi_dig, ch_magic_idx = 81, 82, 83
+    ch_short_lhs, ch_multi_dig, ch_magic_idx, ch_pascal = 81, 82, 83, 84
     conv7_w[1, [HC_LO, HC_LEAD], ch_short_lhs] = 1
     conv7_w[2, [HC_ID, HC_LEAD, HC_COMM, HC_STR], ch_short_lhs] = [1, 1, -1, -1]
     conv7_w[3, [HC_ACT, HC_CNS], ch_short_lhs] = [1, -1]
@@ -667,9 +764,23 @@ def _build_block1(
     conv7_w[2, [HC_DIG, HC_COMM, HC_STR], ch_magic_idx] = [1, -1, -1]
     conv7_w[3, HC_DIG, ch_magic_idx] = 1
     conv7_s[ch_magic_idx], conv7_b[ch_magic_idx] = 2.0, -5.0
+
+    conv7_w[1, HC_ID, ch_pascal] = 1
+    _stamp_char(conv7_w, 2, ch_pascal, ":")
+    _stamp_char(conv7_w, 3, ch_pascal, " ")
+    conv7_w[4, HC_UP, ch_pascal] = 1
+    conv7_w[5, HC_LO, ch_pascal] = 1
+    conv7_w[2, [HC_COMM, HC_STR], ch_pascal] = -1
+    conv7_s[ch_pascal], conv7_b[ch_pascal] = 2.0, -33.0
     feat["short_lhs"] = off_c7 + ch_short_lhs
     feat["multi_digit"] = off_c7 + ch_multi_dig
     feat["magic_index"] = off_c7 + ch_magic_idx
+    feat["param_pascal"] = off_c7 + ch_pascal
+
+    for offset, (pat, cs) in enumerate(_K7_V04_COMM):
+        ch_i = 102 + offset
+        _sub_filter(conv7_w, conv7_s, conv7_b, ch_i, pat, code=False, comm=True, cs=cs)
+        feat[f"c:{pat}"] = off_c7 + ch_i
 
     conv13_w = np.zeros((13, N_HC, n_conv13), dtype=np.int8)
     conv13_s = np.ones((n_conv13,), dtype=np.float32)
@@ -693,6 +804,23 @@ def _build_block1(
         _sub_filter(conv13_w, conv13_s, conv13_b, ch_i, pat, code=False, comm=True)
         feat[pat] = off_c13 + ch_i
 
+    str_k13 = {
+        'return ""', "return ''", "localhost",
+        "127.0.0.1", "sqlite://", "dev-secret", "changeme",
+    }
+    for offset, (pat, wl, wr, cs) in enumerate(_K13_V04_CODE):
+        ch_i = 25 + offset
+        _sub_filter(
+            conv13_w, conv13_s, conv13_b, ch_i, pat,
+            wl=wl, wr=wr, cs=cs, no_str=(pat not in str_k13),
+        )
+        feat[pat] = off_c13 + ch_i
+
+    for offset, (pat, cs) in enumerate(_K13_V04_COMM):
+        ch_i = 62 + offset
+        _sub_filter(conv13_w, conv13_s, conv13_b, ch_i, pat, code=False, comm=True, cs=cs)
+        feat[f"c:{pat}"] = off_c13 + ch_i
+
     # Declarative line-level rules compiled into strictly {-1, 0, +1} lmlp1_w & lmlp2_w
     module_headers = [
         ("from ", -3.0), ("use ", -3.0), ("import ", -3.0),
@@ -708,6 +836,8 @@ def _build_block1(
         ("Wrapper", 1.0), ("Helper", 0.9), ("Impl", 1.1), ("Abstract", 1.3),
         ("Repository", 1.1), ("Configuration", 0.8), ("Controller", 0.9),
         ("Strategy", 1.0), ("Provider", 0.9), ("Processor", 0.9),
+        ("_old", 1.5), ("_bak", 1.5), ("_backup", 1.5),
+        ("_deprecated", 1.5), ("Deprecated", 1.5),
     ]
     stdlib_idiom_terms = [
         ("Prototype", 12.0), ("ERR_", 10.0), ("SAFE_IN", 10.0),
@@ -727,6 +857,14 @@ def _build_block1(
 
     short_golf_terms = [("short_lhs", 1.5), ("one_char_id", 0.5)]
     magic_num_terms = [("magic_index", 1.0), ("multi_digit", 0.30)]
+    fallback_swallow_terms = [
+        ("|| {}", 1.4), ("|| []", 1.4), ("|| '')", 1.0), (" or []", 1.4),
+        (" or {}", 1.4), ("type: i", 1.8), ("noqa", 1.6), ("nolint", 1.6),
+        ("#[allow(", 0.7), ("eslint-disabl", 2.0), ("@ts-ignore", 2.0), ("?.", 0.45),
+        (" as any", 1.8), ("as unknown", 1.8), ("cast(Any", 1.8),
+        ("c:pyright: ign", 1.8), ("c:biome-ignore", 1.8),
+    ]
+
     line_rules: list[tuple[list[tuple[str, float]], float, int, float]] = [
         ([("has_nonspace", 1.0)], 0.0, Z_ACTIVE, 1.0),
         ([("code_chars", 1.0)], 0.0, Z_HAS_CODE, 1.0),
@@ -776,13 +914,11 @@ def _build_block1(
         ([("throw", 1.5), ("raise", 1.5), (".code", 1.5), ("reject(", 1.5),
           ("cb(", 1.5), ("emit(", 1.0), ("destroy", 1.2), ("callback(", 1.5)],
          0.0, Z_REAL_HANDLER, 1.0),
-        ([("{}", 1.5), ("console", 1.2), ("null;", 1.4), ("false;", 1.2), ("pass", 1.4)],
+        ([("{}", 1.5), ("console", 1.2), ("pass", 1.4)],
          0.0, Z_EMPTY_HANDLER, 1.0),
-        ([("return", 1.0), ("None", 1.0), ("0.0", 1.0)], -1.5, Z_EMPTY_HANDLER, 1.8),
-        ([("|| {}", 1.4), ("|| []", 1.4), ("|| '')", 1.0), (" or []", 1.4),
-          (" or {}", 1.4), ("type: i", 1.8), ("noqa", 1.6), ("nolint", 1.6),
-          ("#[allow(", 0.7), ("eslint-disabl", 2.0), ("@ts-ignore", 2.0), ("?.", 0.45)],
-         -0.95, Z_FALLBACK_SWALLOW, 1.2),
+        ([("return", 1.0), ("None", 1.0), ("0.0", 1.0), ("null;", 1.0), ("false;", 1.0)],
+         -1.5, Z_EMPTY_HANDLER, 3.4),
+        (fallback_swallow_terms, -0.95, Z_FALLBACK_SWALLOW, 1.2),
 
         ([(".map(", 1.0), (".filter", 1.0), (".reduce", 1.0), (".flatMa", 1.0), (".unwrap", 0.7)],
          -1.2, Z_CHAINED_CALLS, 1.2),
@@ -806,6 +942,71 @@ def _build_block1(
         ([("indent_cols", 2.0)], 0.0, Z_IS_INDENTED, 1.0),
         ([("indent_cols", 2.0)], -1.0, Z_IS_INDENTED, -1.0),
     ]
+
+    sig_open_pats = ("function ", "def ", "=>", "func_call", "): ", ") ->")
+    static_type_pats = (
+        ": string", ": number", ": boolean", ": str",
+        ": int", ": float", ": bool", ": list",
+        ": dict", ": Record<", "typed_arr", "param_pascal",
+    )
+    sig_veto_pats = (
+        "export ", "pub ", "public ", "any",
+        "Any", "unknown", ": object", "Optional",
+        "null", "undefined", "= None", "?:", " | ",
+    )
+    neutral_ret_pats = (
+        "return 0", "return []", "return {}", 'return ""',
+        "return ''", "return null", "return None",
+    )
+    env_lookup_pats = ("process.env", ".meta.env", "os.getenv(", "os.environ")
+    dev_default_pats = (
+        "localhost", "127.0.0.1", "0.0.0.0",
+        "sqlite://", "dev-secret", "changeme",
+    )
+    env_veto_pats = (
+        "if", "elif", "else if", "while",
+        "throw", "raise", "ERR_", "assert(", "assert ",
+    )
+    elision_pats = (
+        "c:rest of ", "c:existing ", "c:placeholder",
+        "c:unchanged", "c:// ...", "c:# ...",
+    )
+    comm_code_pats = (
+        "comm_semi", "c:===", "c:=>", "c:){",
+        "c:) {", "c:// }", "c:# def ", "c:  def ",
+        "c:# if ", "c:  if ", "c:# for ", "c:  for ",
+        "c:// const ", "c:  const ", "c:// let ", "c:  let ",
+        "c:// return ", "c:# return ", "c:  return ",
+    )
+    clamped_indicators = (
+        (sig_open_pats, Z_SIG_OPEN),
+        (static_type_pats, Z_STATIC_TYPE),
+        (sig_veto_pats, Z_SIG_VETO),
+        (("semi_only",), Z_SEMI_ONLY),
+        (("if",), Z_IF_LINE),
+        (("Array.isArray", "typeof", "isinstance("), Z_TYPE_HEDGE),
+        (("throw", "raise", "ERR_", "assert(", "assert "), Z_FAIL_FAST),
+        (neutral_ret_pats, Z_NEUTRAL_RET),
+        (env_lookup_pats, Z_HAS_ENV),
+        (("||", "??", " or "), Z_HAS_COALESCE),
+        (dev_default_pats, Z_DEV_DEFAULT),
+        (env_veto_pats, Z_ENV_VETO),
+        ((" = ",), Z_HAS_ASSIGN),
+        (elision_pats, Z_ELISION_RAW),
+        (("doc_or_block_comm", "c:///", "c://!", "code_chars"), Z_LINE_COMM_VETO),
+        (("c:```", "c:>>>"), Z_COMM_FENCE),
+        (comm_code_pats, Z_COMM_STRONG_CUE),
+        (("c: = ",), Z_COMM_ASSIGN),
+        (("comm_fcall",), Z_COMM_FCALL),
+    )
+    for pat_names, dst_reg in clamped_indicators:
+        unit_terms = [(key, 1.0) for key in pat_names]
+        line_rules.append((unit_terms, 0.0, dst_reg, 1.0))
+        line_rules.append((unit_terms, -1.0, dst_reg, -1.0))
+
+    two_env_terms = [(key, 1.0) for key in env_lookup_pats]
+    line_rules.append((two_env_terms, -1.0, Z_TWO_ENVS, 1.0))
+    line_rules.append((two_env_terms, -2.0, Z_TWO_ENVS, -1.0))
 
     free_narrow = [slot for slot in range(n_conv3) if not np.any(conv3_w[:, :, slot])]
     free_medium = [slot for slot in range(n_conv7) if not np.any(conv7_w[:, :, slot])]
@@ -867,11 +1068,12 @@ def _build_block1(
         return out_idx
 
     num_u = n_csum + n_conv3 + n_conv7 + n_conv13
-    lm1_w = np.zeros((num_u, 96), dtype=np.int8)
-    lm1_s = np.ones((96,), dtype=np.float32)
-    lm1_b = np.zeros((96,), dtype=np.float32)
-    lm2_w = np.zeros((96, 112), dtype=np.int8)
-    lm2_b = np.zeros((112,), dtype=np.float32)
+    n_lm1 = 124
+    lm1_w = np.zeros((num_u, n_lm1), dtype=np.int8)
+    lm1_s = np.ones((n_lm1,), dtype=np.float32)
+    lm1_b = np.zeros((n_lm1,), dtype=np.float32)
+    lm2_w = np.zeros((n_lm1, N_LMLP2), dtype=np.int8)
+    lm2_b = np.zeros((N_LMLP2,), dtype=np.float32)
 
     ref_counts: Counter[int] = Counter()
     for terms, _, _, _ in line_rules:
@@ -1068,6 +1270,11 @@ def _build_block2_and_heads(
     a1_wv_s[extra_f_slots] = [1.0, 1.0, 7.5]
     a1_wo[extra_f_slots, [Z_FMOD42_DUP, Z_FODD_DUP, Z_FODD_SCALED]] = 1
 
+    fence_slot = 41
+    a1_wv[Z_COMM_FENCE, fence_slot] = 1
+    a1_wv_s[fence_slot] = 40.0
+    a1_wo[fence_slot, Z_NEAR_COMM_FENCE] = 1
+
     trit_mats["attn1_wq"], vecs_1d["attn1_wq_s"] = a1_wq, a1_wq_s
     trit_mats["attn1_wk"], vecs_1d["attn1_wk_s"] = a1_wk, a1_wk_s
     trit_mats["attn1_wv"], vecs_1d["attn1_wv_s"] = a1_wv, a1_wv_s
@@ -1124,6 +1331,30 @@ def _build_block2_and_heads(
          -0.25, [Z_CLEAN_BONUS], 1.0, 1.2),
         ([(Z_SHORT_GOLF, 1), (Z_LOCAL_SHORT_GOLF, 1)], -1.35, [Z_ISS_NAMING], 0.6, 2.5),
         ([(Z_MAGIC_NUM, 1), (Z_LOCAL_MAGIC_NUM, 1)], -0.78, [Z_ISS_NAMING], 0.9, 2.5),
+
+        ([(Z_SIG_OPEN, 1), (Z_STATIC_TYPE, 1), (Z_SIG_VETO, -1), (Z_SEMI_ONLY, -1)],
+         -1.5, [Z_TYPED_INTERNAL_SIG], 1.0, 4.0),
+        ([(Z_SIG_VETO, 1), (Z_SEMI_ONLY, -1)],
+         -0.5, [Z_BOUNDARY_SIG_LINE], 1.0, 4.0),
+        ([(Z_IF_LINE, 1), (Z_TYPE_HEDGE, 1), (Z_FAIL_FAST, -1)],
+         -1.5, [Z_TYPE_HEDGE_IF], 1.0, 4.0),
+        ([(Z_TWO_ENVS, 1), (Z_HAS_COALESCE, 1), (Z_ENV_VETO, -1)],
+         -1.5, [Z_ENV_CHAIN_1L], 1.0, 4.0),
+        ([(Z_HAS_ENV, 1), (Z_DEV_DEFAULT, 1), (Z_ENV_VETO, -1)],
+         -1.5, [Z_ENV_DEV_1L], 1.0, 4.0),
+
+        ([(Z_HAS_ENV, 1), (Z_HAS_ASSIGN, -1), (Z_ENV_VETO, -1)],
+         -0.5, [Z_CONT_ENV], 1.0, 4.0),
+        ([(Z_DEV_DEFAULT, 1), (Z_HAS_ASSIGN, -1), (Z_FAIL_FAST, -1)],
+         -0.5, [Z_CONT_DEV_DEF], 1.0, 4.0),
+        ([(Z_ELISION_RAW, 1), (Z_LINE_COMM_VETO, -1)],
+         -0.5, [Z_ISS_COMMENT], 1.0, 4.0),
+        ([(Z_PURE_COMMENT, 1), (Z_COMM_STRONG_CUE, 1),
+          (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1)],
+         -1.5, [Z_COMM_CODE_LINE], 1.0, 4.0),
+        ([(Z_PURE_COMMENT, 1), (Z_COMM_ASSIGN, 1), (Z_COMM_FCALL, 1),
+          (Z_COMM_STRONG_CUE, -1), (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1)],
+         -2.5, [Z_COMM_CODE_LINE], 1.0, 4.0),
     ]
 
     for idx, (terms, bias, dst_list, base_sc, gain) in enumerate(ctx1_rules):
@@ -1139,16 +1370,22 @@ def _build_block2_and_heads(
     trit_mats["cmlp1_2_w"], vecs_1d["cmlp1_2_b"] = cm1_2w, cm1_2b
 
     # Pass 2 neighborhood smoothing attention & context MLP 2 in {-1, 0, +1}
-    trit_mats["attn2_wq"] = np.zeros((N_Z, 64), dtype=np.int8)
-    trit_mats["attn2_wk"] = np.zeros((N_Z, 64), dtype=np.int8)
-    a2_wv = np.zeros((N_Z, 64), dtype=np.int8)
-    a2_wv_s = np.ones((64,), dtype=np.float32)
-    a2_wo = np.zeros((64, N_Z), dtype=np.int8)
-    a2_br = np.full((4, num_rel), -1e4, dtype=np.float32)
+    a2_wq = np.zeros((N_Z, 128), dtype=np.int8)
+    a2_wq_s = np.ones((128,), dtype=np.float32)
+    a2_wk = np.zeros((N_Z, 128), dtype=np.int8)
+    a2_wk_s = np.ones((128,), dtype=np.float32)
+    a2_wv = np.zeros((N_Z, 128), dtype=np.int8)
+    a2_wv_s = np.ones((128,), dtype=np.float32)
+    a2_wo = np.zeros((128, N_Z), dtype=np.int8)
+    a2_br = np.full((8, num_rel), -1e4, dtype=np.float32)
     a2_br[0, center - 3 : center + 4] = 0.0
     a2_br[1, center - 2 : center + 3] = 0.0
     a2_br[2, center - 3 : center + 4] = 0.0
     a2_br[3, center - 2 : center + 3] = 0.0
+    a2_br[4, center - 2 : center + 3] = 0.0
+    a2_br[5, center - 4 : center] = 0.0
+    a2_br[6, center : center + 2] = 0.0
+    a2_br[7, center + 1] = 0.0
 
     smooth_srcs = [
         Z_RAW_CLONE, Z_ISS_NESTING, Z_ISS_SPECIAL,
@@ -1163,9 +1400,40 @@ def _build_block2_and_heads(
     a2_wo[smooth_slots, smooth_dsts] = 1
     a2_wv_s[smooth_slots] = [5.0 / 2.0, 1.2 / 4.2, 1.2 / 4.3, 3.0 / 1.6, 1.0 / 4.3, 1.0]
 
+    h4_slot = 64
+    a2_wv[Z_COMM_CODE_LINE, h4_slot] = 1
+    a2_wo[h4_slot, Z_SMOOTH_COMM_CODE] = 1
+
+    h5_qk, h5_pos, h5_neg = 80, 80, 81
+    a2_wq[Z_ACTIVE, h5_qk] = 1
+    a2_wk[[Z_TYPED_INTERNAL_SIG, Z_BOUNDARY_SIG_LINE], h5_qk] = 1
+    a2_wq_s[h5_qk] = a2_wk_s[h5_qk] = 8.0
+    a2_wv[[Z_TYPED_INTERNAL_SIG, Z_BOUNDARY_SIG_LINE], [h5_pos, h5_neg]] = 1
+    a2_wv_s[[h5_pos, h5_neg]] = [1.0, 4.0]
+    a2_wo[[h5_pos, h5_neg], Z_HAS_RECENT_TYPED_SIG] = [1, -1]
+
+    h6_qk, h6_pos, h6_neg = 96, 96, 97
+    a2_wq[Z_ACTIVE, h6_qk] = 1
+    a2_wk[[Z_NEUTRAL_RET, Z_FAIL_FAST], h6_qk] = 1
+    a2_wq_s[h6_qk] = a2_wk_s[h6_qk] = 8.0
+    a2_wv[[Z_NEUTRAL_RET, Z_FAIL_FAST], [h6_pos, h6_neg]] = 1
+    a2_wv_s[[h6_pos, h6_neg]] = [1.0, 3.0]
+    a2_wo[[h6_pos, h6_neg], Z_NEAR_NEUTRAL_RET] = [1, -1]
+
+    h7_slots = [112, 113, 114, 115]
+    h7_srcs = [Z_CONT_ENV, Z_CONT_DEV_DEF, Z_FAIL_FAST, Z_HAS_COALESCE]
+    h7_dsts = [Z_NEXT_CONT_ENV, Z_NEXT_CONT_DEV, Z_NEXT_FAIL_FAST, Z_NEXT_COAL]
+    a2_wv[h7_srcs, h7_slots] = 1
+    a2_wv_s[h7_slots] = 2.0
+    a2_wo[h7_slots, h7_dsts] = 1
+
+    trit_mats["attn2_wq"], vecs_1d["attn2_wq_s"] = a2_wq, a2_wq_s
+    trit_mats["attn2_wk"], vecs_1d["attn2_wk_s"] = a2_wk, a2_wk_s
     trit_mats["attn2_wv"], vecs_1d["attn2_wv_s"], trit_mats["attn2_wo"] = a2_wv, a2_wv_s, a2_wo
     vecs_1d["attn2_brel"] = a2_br
-    vecs_1d["attn2_bsink"] = np.array([0.7, -12.0, -12.0, -12.0], dtype=np.float32)
+    vecs_1d["attn2_bsink"] = np.array(
+        [0.7, -12.0, -12.0, -12.0, math.log(5.0), 4.0, 4.0, 0.0], dtype=np.float32
+    )
 
     cm2_w = np.zeros((N_Z, 64), dtype=np.int8)
     cm2_s = np.ones((64,), dtype=np.float32)
@@ -1191,6 +1459,42 @@ def _build_block2_and_heads(
     cm2_b[4:8] = [0.0, -1.0, 0.0, -nest_sm_ratio]
     cm2_2w[[4, 5], Z_ISS_NESTING] = [1, -1]
     cm2_2w[[6, 7], Z_SMOOTH_NEST] = [1, -1]
+
+    paranoid_dsts = [
+        (Z_ISS_ERROR, 1), (Z_CLEAN_BONUS, -1),
+        (Z_GUARD_CLAUSE, -1), (Z_EARLY_EXIT, -1),
+    ]
+    ctx2_rules: list[tuple[list[tuple[int, int]], float, list[tuple[int, int]], float]] = [
+        ([(Z_COMM_CODE_LINE, 1), (Z_SMOOTH_COMM_CODE, 1)],
+         -1.293, [(Z_ISS_COMMENT, 1)], 150.0),
+        ([(Z_TYPE_HEDGE_IF, 1), (Z_HAS_RECENT_TYPED_SIG, 1), (Z_NEAR_NEUTRAL_RET, 1)],
+         -2.5, paranoid_dsts, 4.0),
+        ([(Z_ENV_CHAIN_1L, 1), (Z_NEXT_FAIL_FAST, -1)],
+         -0.5, [(Z_ISS_ERROR, 1)], 4.0),
+        ([(Z_ENV_DEV_1L, 1), (Z_ENV_CHAIN_1L, -1), (Z_NEXT_FAIL_FAST, -1)],
+         -0.5, [(Z_ISS_ERROR, 1)], 4.0),
+
+        ([(Z_HAS_ENV, 1), (Z_NEXT_CONT_DEV, 1), (Z_ENV_VETO, -1),
+          (Z_SEMI_ONLY, -1), (Z_ENV_CHAIN_1L, -1), (Z_ENV_DEV_1L, -1)],
+         -1.5, [(Z_ISS_ERROR, 1)], 4.0),
+        ([(Z_HAS_ENV, 1), (Z_NEXT_CONT_ENV, 1), (Z_NEXT_COAL, 1),
+          (Z_ENV_VETO, -1), (Z_SEMI_ONLY, -1), (Z_NEXT_FAIL_FAST, -1),
+          (Z_ENV_CHAIN_1L, -1), (Z_ENV_DEV_1L, -1), (Z_NEXT_CONT_DEV, -1)],
+         -2.5, [(Z_ISS_ERROR, 1)], 4.0),
+        ([(Z_HAS_ENV, 1), (Z_NEXT_CONT_ENV, 1), (Z_HAS_COALESCE, 1), (Z_NEXT_COAL, -1),
+          (Z_ENV_VETO, -1), (Z_SEMI_ONLY, -1), (Z_NEXT_FAIL_FAST, -1),
+          (Z_ENV_CHAIN_1L, -1), (Z_ENV_DEV_1L, -1), (Z_NEXT_CONT_DEV, -1)],
+         -2.5, [(Z_ISS_ERROR, 1)], 4.0),
+    ]
+    for idx, (terms, bias, dst_signs, gain) in enumerate(ctx2_rules):
+        unit = 8 + 2 * idx
+        for src_z, trit in terms:
+            cm2_w[src_z, [unit, unit + 1]] = trit
+        cm2_s[[unit, unit + 1]] = gain
+        cm2_b[[unit, unit + 1]] = [bias * gain, bias * gain - 1.0]
+        for dst_z, sign_out in dst_signs:
+            cm2_2w[[unit, unit + 1], dst_z] = [sign_out, -sign_out]
+
     trit_mats["cmlp2_w"], vecs_1d["cmlp2_s"], vecs_1d["cmlp2_b"] = cm2_w, cm2_s, cm2_b
     trit_mats["cmlp2_2_w"], vecs_1d["cmlp2_2_b"] = cm2_2w, cm2_2b
 
@@ -1347,6 +1651,9 @@ if __name__ == "__main__":
     out_file = Path(__file__).with_name("codehygiene") / "weights.npz"
     trits_raw, vecs_raw = compile_ternary_tensors()
     compile_weights(out_file)
+    docs_weights = Path(__file__).with_name("docs") / "weights.npz"
+    if docs_weights.parent.is_dir():
+        docs_weights.write_bytes(out_file.read_bytes())
     size_kb = out_file.stat().st_size / 1024
     num_trits = sum(arr.size for arr in trits_raw.values())
     num_vecs = sum(arr.size for arr in vecs_raw.values())

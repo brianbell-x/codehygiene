@@ -13,7 +13,7 @@ import sys
 from typing import Any
 import numpy as np
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "ARCHETYPE_NAMES", "MAX_COLS", "MAX_REL_DIST", "Result", "SCORE_NAMES",
     "SQUIGGLE_KINDS", "SQUIGGLE_MESSAGES", "Squiggle", "encode_byte_grid",
@@ -171,10 +171,15 @@ def encode_byte_grid(code: str, max_lines: int = 2048) -> tuple[np.ndarray, list
     lines = (code.expandtabs(2).splitlines() or [""])[:max_lines]
     grid = np.zeros((len(lines), MAX_COLS), dtype=np.uint8)
     for row, text in enumerate(lines):
-        if text:
-            raw_bytes = text.encode("ascii", "replace")[:MAX_COLS]
-            ascii_codes = np.frombuffer(raw_bytes, dtype=np.uint8) & 0x7F
-            grid[row, : len(ascii_codes)] = np.where(ascii_codes == 0, 32, ascii_codes)
+        if not text:
+            continue
+        clipped = text[:MAX_COLS]
+        if clipped.isascii():
+            ascii_codes = np.frombuffer(clipped.encode("ascii"), dtype=np.uint8)
+        else:
+            codepoints = np.frombuffer(clipped.encode("utf-32-le"), dtype=np.uint32)
+            ascii_codes = np.minimum(codepoints, 127).astype(np.uint8)
+        grid[row, : len(ascii_codes)] = np.where(ascii_codes == 0, 32, ascii_codes)
     return grid, lines
 
 
@@ -195,7 +200,7 @@ def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarra
         + params["col_fuse_b"]
     )
 
-    # Block 1: k=3/7/13 pattern convolutions + 40-dim SimHash stem sketches -> state (L, 192)
+    # Block 1: k=3/7/13 pattern convolutions + 40-dim SimHash stem sketches -> state (L, N_Z)
     conv3 = _relu(_conv1d(cells, params["conv3_w"], params["conv3_b"])).sum(axis=1)
     conv7 = _relu(_conv1d(cells, params["conv7_w"], params["conv7_b"])).sum(axis=1)
     conv13 = _relu(_conv1d(cells, params["conv13_w"], params["conv13_b"])).sum(axis=1)
@@ -414,7 +419,7 @@ def _expand_paths(specs: list[str]) -> list[Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    desc = "An 11 KB, 1.58-bit ternary weight-space programmed System One model for code hygiene."
+    desc = "A 13 KB, 1.58-bit ternary weight-space programmed System One model for code hygiene."
     parser = argparse.ArgumentParser(prog="codehygiene", description=desc)
     parser.add_argument("files", nargs="*", help="Files, directories, or globs (stdin if piped)")
     parser.add_argument("-t", "--threshold", type=float, default=0.55, help="Squiggle threshold")

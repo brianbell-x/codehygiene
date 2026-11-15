@@ -1,12 +1,14 @@
 # codehygiene
 
-An 11 KB, 1.58-bit ternary weight-space programmed System One model for code readability and hygiene.
+A 13 KB, 1.58-bit ternary weight-space programmed System One model for code readability and hygiene.
+
+**[Try it on any GitHub repository →](https://brianbell-x.github.io/codehygiene/)**
 
 ![codehygiene diff](assets/diff.png)
 
-Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like cryptic golf or deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `428K`-parameter `1.58-bit` ternary neural network in pure NumPy (`~10 ms` on CPU across macOS, Linux, and Windows) for 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
+Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like cryptic golf or deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `574K`-parameter `1.58-bit` ternary neural network in pure NumPy (`~10 ms` on CPU across macOS, Linux, and Windows) for 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
 
-- **1.58-bit ternary weight-space programmed:** No training data or gradient descent is used. Every 2D/3D weight, convolution, causal, attention, and embedding matrix in `weights.npz` has entries strictly in `{-1, 0, +1}` (`425,044` trits packed at `5` trits/byte + `3,253` 1D channel scales/biases = `10.5 KiB`), compiled directly from explicit mathematical circuits in `compile.py`.
+- **1.58-bit ternary weight-space programmed:** No training data or gradient descent is used. Every 2D/3D weight, convolution, causal, attention, and embedding matrix in `weights.npz` has entries strictly in `{-1, 0, +1}` (`569,662` trits packed at `5` trits/byte + `4,103` 1D channel scales/biases = `13.0 KiB`), compiled directly from explicit mathematical circuits in `compile.py`.
 - **System One judgment:** No text is generated. A single forward pass returns calibrated `0.0–1.0` hygiene scores, 6 style sub-scores, a style archetype, and line-level `Squiggle` diagnostics.
 
 ## Example Output
@@ -46,6 +48,16 @@ Or run the CLI directly via `uvx` / `pip`:
 ```bash
 uvx --from git+https://github.com/brianbell-x/codehygiene codehygiene .
 pip install git+https://github.com/brianbell-x/codehygiene
+```
+
+## Interactive Browser Demo (`docs/`)
+
+Live on GitHub Pages: **[https://brianbell-x.github.io/codehygiene/](https://brianbell-x.github.io/codehygiene/)**
+
+A zero-backend client-side repository scorer and playground is included in `docs/`. Any public GitHub repository URL (`https://github.com/owner/repo`) or pasted snippet is scored locally in the browser: the `12.97 KiB` `weights.npz` archive is unpacked via `DecompressionStream("deflate-raw")` and executed across a parallel Web Worker pool (`Float32Array`), producing a codebase hygiene summary, filterable directory scores, live squiggle underlines, polyglot **Before / After** presets, and an optional **Circuit X-ray** inspector (`Block 0` byte-grid masks and `Block 3` line probabilities):
+
+```bash
+python3 -m http.server 8123 -d docs
 ```
 
 ## CLI
@@ -96,20 +108,20 @@ Squiggle `kind` values: `deep_nesting`, `poor_naming`, `noisy_comment`, `swallow
 
 ## Benchmarks
 
-Evaluated with zero training across a 54-slice production canon (`27` files, `11` languages) and annotated polyglot/anti-golf diagnostic suites, comparing the `32-bit float32` (`v0.2`) and `1.58-bit ternary` (`v0.3`) weight compilations:
+Evaluated with zero training across a 54-slice production canon (`27` files, `11` languages), annotated polyglot/anti-golf diagnostic suites, and `28` static AI-slop & defensive-paranoia circuits across `float32` (`v0.2`) and `1.58-bit` ternary (`v0.3`, `v0.4`) compilations:
 
-| Metric | `float32` (`v0.2`) | `1.58-bit` Ternary (`v0.3`) | Delta |
+| Metric | `float32` (`v0.2`) | `1.58-bit` Ternary (`v0.3`) | `1.58-bit` Ternary (`v0.4`) |
 | :--- | :---: | :---: | :---: |
-| **Matrix weight domain (`425,044` weights)** | `float32` (`32.00` b/w) | **`{-1, 0, +1}` (`1.60` b/w, 5 trits/byte)** | **`20.0x` denser** |
-| **Uncompressed payload (`trits` + `vecs`)** | `1,668.41 KiB` | **`95.74 KiB`** (`83.03 KiB` trits + `12.71 KiB` scales/biases) | **`17.4x` smaller** |
-| **Compressed `weights.npz` on disk** | `33.03 KiB` (`33,821 B`) | **`10.52 KiB` (`10,772 B`)** | **`3.14x` smaller** |
-| **Cold `.npz` load + unpack latency** | `8.03 ms` | **`5.06 ms`** | **`1.59x` faster** |
-| **Warm CPU latency (`12` / `65` / `391` lines)** | `9.68` / `69.2` / `464.6 ms` | **`9.70` / `50.4` / `346.1 ms`** | **up to `1.37x` faster** |
-| **Polyglot canon vs. slop AUROC** (`11` languages) | `0.986` | **`0.976`** | `-0.010` |
-| **Controlled diagnostic AUROC** (clean vs. messy) | `1.000` | **`1.000`** | `0.000` |
-| **Annotated squiggle & anti-golf recall** | `100%` (`14 / 14`) | **`100%` (`14 / 14`)** | `0.0%` |
-| **Production canon squiggle rate** (`3,513` lines) | `1.99` / 100 lines | **`2.05` / 100 lines** | `+0.06` / 100L |
-| **Clean trap & repository self-lint false positives** | `0` | **`0`** | `0` |
+| **Matrix weight domain** | `float32` (`32.00` b/w) | `{-1, 0, +1}` (`425,044` trits) | **`{-1, 0, +1}` (`569,662` trits, `1.60` b/w)** |
+| **Uncompressed payload (`trits` + `vecs`)** | `1,668.41 KiB` | `95.74 KiB` | **`127.30 KiB`** (`111.28 KiB` trits + `16.03 KiB` vecs) |
+| **Compressed `weights.npz` on disk** | `33.03 KiB` (`33,821 B`) | `10.52 KiB` (`10,772 B`) | **`12.97 KiB` (`13,281 B`)** |
+| **Cold `.npz` load + unpack latency** | `8.03 ms` | `4.68–5.06 ms` | **`5.67 ms`** |
+| **Warm CPU latency (`12` / `65` / `391` lines)** | `9.68` / `69.2` / `464.6 ms` | `9.70` / `50.4` / `346.1 ms` | **`10.24` / `63.6` / `410.9 ms`** |
+| **Controlled diagnostic AUROC** (clean vs. messy) | `1.000` | `1.000` | **`1.000`** |
+| **Core squiggle & anti-golf recall** | `100%` (`14 / 14`) | `100%` (`14 / 14`) | **`100%` (`14 / 14`)** |
+| **Static AI-slop & paranoia recall** (`5` families) | `0%` (`0 / 28`) | `0%` (`0 / 28`) | **`100%` (`28 / 28`)** |
+| **Production canon squiggle rate** (`11` languages) | `1.99` / 100 lines | `2.05` / 100 lines | **`2.05` / 100 lines (`0` new FPs)** |
+| **Clean trap & repository self-lint false positives** | `1` (`catch` reset) | `1` (`catch` reset) | **`0` (`22 / 22` clean traps)** |
 
 ## Agent Corpus Benchmark (GPT-OSS 120B Before / After)
 
@@ -131,7 +143,7 @@ Full sub-score breakdowns, squiggle distributions, and concrete agent failure mo
 
 ## Build Weights
 
-All `32` ternary `{-1, 0, +1}` matrices (`425,044` trits packed at `5` trits per `uint8` byte, `92.6%` zero) and `3,253` 1D scale/bias scalars in `codehygiene/weights.npz` (`10.52 KiB`) are deterministically generated from `compile.py`:
+All `32` ternary `{-1, 0, +1}` matrices (`569,662` trits packed at `5` trits per `uint8` byte, `93.5%` zero) and `4,103` 1D scale/bias scalars in `codehygiene/weights.npz` (`12.97 KiB`) are deterministically generated from `compile.py`:
 
 ```bash
 python3 compile.py
