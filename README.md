@@ -2,6 +2,8 @@
 
 A 33 KB, weight-space programmed System One model for code readability and hygiene.
 
+![codehygiene diff](assets/diff.png)
+
 Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like cryptic golf or deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `427K`-parameter neural network in pure NumPy (`~15 ms` on CPU) across 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
 
 - **Weight-space programmed:** No training data or gradient descent is used. Every weight in `weights.npz` is compiled directly from explicit mathematical circuits in `compile.py`.
