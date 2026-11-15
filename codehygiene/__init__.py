@@ -1,4 +1,4 @@
-"""Weight-Space Programmed System One model for code aesthetics and understandability."""
+"""Weight-Space Programmed System One model for code readability and hygiene."""
 
 from __future__ import annotations
 
@@ -354,10 +354,7 @@ def _expand_paths(specs: list[str]) -> list[Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    desc = (
-        "A 33 KB, weight-space programmed System One model that lints and scores "
-        "code for aesthetics and understandability."
-    )
+    desc = "A 33 KB, weight-space programmed System One model for code readability and hygiene."
     parser = argparse.ArgumentParser(prog="codehygiene", description=desc)
     parser.add_argument("files", nargs="*", help="Files, directories, or globs (stdin if piped)")
     parser.add_argument("-t", "--threshold", type=float, default=0.55, help="Squiggle threshold")
