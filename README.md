@@ -1,12 +1,12 @@
 # codehygiene
 
-A 33 KB, weight-space programmed System One model for code readability and hygiene.
+An 11 KB, 1.58-bit ternary weight-space programmed System One model for code readability and hygiene.
 
 ![codehygiene diff](assets/diff.png)
 
-Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like cryptic golf or deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `427K`-parameter neural network in pure NumPy (`~15 ms` on CPU) across 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
+Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like cryptic golf or deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `428K`-parameter `1.58-bit` ternary neural network in pure NumPy (`~10 ms` on CPU) across 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
 
-- **Weight-space programmed:** No training data or gradient descent is used. Every weight in `weights.npz` is compiled directly from explicit mathematical circuits in `compile.py`.
+- **1.58-bit ternary weight-space programmed:** No training data or gradient descent is used. Every 2D/3D weight, convolution, causal, attention, and embedding matrix in `weights.npz` has entries strictly in `{-1, 0, +1}` (`425,044` trits packed at `5` trits/byte + `3,253` 1D channel scales/biases = `10.5 KiB`), compiled directly from explicit mathematical circuits in `compile.py`.
 - **System One judgment:** No text is generated. A single forward pass returns calibrated `0.0–1.0` hygiene scores, 6 style sub-scores, a style archetype, and line-level `Squiggle` diagnostics.
 
 ## Example Output
@@ -34,16 +34,18 @@ example.py
 
 ## Quickstart
 
-Run directly without installing via `uvx`, or install with `pip`:
+Install as an agent skill (Claude Code, Codex, Cursor, Antigravity, Copilot) with bundled offline weights via `npx skills`:
+
+```bash
+npx skills add brianbell-x/codehygiene     # current project
+npx skills add brianbell-x/codehygiene -g  # global across all projects
+```
+
+Or run the CLI directly via `uvx` / `pip`:
 
 ```bash
 uvx --from git+https://github.com/brianbell-x/codehygiene codehygiene .
-```
-
-```bash
 pip install git+https://github.com/brianbell-x/codehygiene
-# or from a local clone:
-pip install .
 ```
 
 ## CLI
@@ -63,7 +65,7 @@ cat snippet.rs | codehygiene --json        # evaluate raw source from stdin
 ```python
 import codehygiene
 
-res = codehygiene.score(code)                        # full Result object (~15 ms on CPU)
+res = codehygiene.score(code)                        # full Result object (~10 ms on CPU)
 issues = codehygiene.lint(code, threshold=0.55)      # list[Squiggle]
 reward = codehygiene.rl_reward(code, tests_passed=True, weight=0.25)
 ```
@@ -94,20 +96,24 @@ Squiggle `kind` values: `deep_nesting`, `poor_naming`, `noisy_comment`, `swallow
 
 ## Benchmarks
 
-Evaluated with zero training across a 54-slice production canon (`27` files, `11` languages) and an 18-case annotated diagnostic suite:
+Evaluated with zero training across a 54-slice production canon (`27` files, `11` languages) and annotated polyglot/anti-golf diagnostic suites, comparing the `32-bit float32` (`v0.2`) and `1.58-bit ternary` (`v0.3`) weight compilations:
 
-| Evaluation | Result |
-| :--- | :--- |
-| **Polyglot canon vs. slop AUROC** (`27` production files, `11` languages) | **`0.985`** |
-| **Controlled diagnostic AUROC** (`18` cases: clean mean `0.903` vs. slop mean `0.060`) | **`1.000`** |
-| **Annotated squiggle recall** (nesting, ceremony, narrator comments, swallowed errors, clones) | **`100%`** (`14 / 14`) |
-| **Production canon squiggle rate** (`0.00` Rust/C#, `0.51` Go, `2.06` Zig, `2.21` C, `2.31` JS) | **`2.64` / 100 lines** |
-| **Clean trap false positives** (Python comprehensions, `TigerStyle` Zig, terse C, Java builders) | **`0`** |
-| **Runtime footprint & latency** (pure NumPy on CPU, no GPU) | **`33.0 KB` · `~15 ms`** |
+| Metric | `float32` (`v0.2`) | `1.58-bit` Ternary (`v0.3`) | Delta |
+| :--- | :---: | :---: | :---: |
+| **Matrix weight domain (`425,044` weights)** | `float32` (`32.00` b/w) | **`{-1, 0, +1}` (`1.60` b/w, 5 trits/byte)** | **`20.0x` denser** |
+| **Uncompressed payload (`trits` + `vecs`)** | `1,668.41 KiB` | **`95.74 KiB`** (`83.03 KiB` trits + `12.71 KiB` scales/biases) | **`17.4x` smaller** |
+| **Compressed `weights.npz` on disk** | `33.03 KiB` (`33,821 B`) | **`10.52 KiB` (`10,772 B`)** | **`3.14x` smaller** |
+| **Cold `.npz` load + unpack latency** | `8.03 ms` | **`5.06 ms`** | **`1.59x` faster** |
+| **Warm CPU latency (`12` / `65` / `391` lines)** | `9.68` / `69.2` / `464.6 ms` | **`9.70` / `50.4` / `346.1 ms`** | **up to `1.37x` faster** |
+| **Polyglot canon vs. slop AUROC** (`11` languages) | `0.986` | **`0.976`** | `-0.010` |
+| **Controlled diagnostic AUROC** (clean vs. messy) | `1.000` | **`1.000`** | `0.000` |
+| **Annotated squiggle & anti-golf recall** | `100%` (`14 / 14`) | **`100%` (`14 / 14`)** | `0.0%` |
+| **Production canon squiggle rate** (`3,513` lines) | `1.99` / 100 lines | **`2.05` / 100 lines** | `+0.06` / 100L |
+| **Clean trap & repository self-lint false positives** | `0` | **`0`** | `0` |
 
 ## Build Weights
 
-All 53 float32 tensors in `codehygiene/weights.npz` are deterministically generated from `compile.py`:
+All `32` ternary `{-1, 0, +1}` matrices (`425,044` trits packed at `5` trits per `uint8` byte, `92.6%` zero) and `3,253` 1D scale/bias scalars in `codehygiene/weights.npz` (`10.52 KiB`) are deterministically generated from `compile.py`:
 
 ```bash
 python compile.py
@@ -117,5 +123,6 @@ python compile.py
 
 - **Weight-Space Programming:** Rikiya Takehi, Jayden Teoh, Alex Zhang, and Omar Khattab, [*Sparks of Weight-Space Programming: LLMs can natively read & write neural network weights*](https://rikiyat.github.io/blog/weight-space-programming/), MIT CSAIL (2026) · [code & logs](https://github.com/rikiyat/lm_understand-logs)
 - **Interpretable Weight-Space Programming (iWSP):** Chandan Singh et al., [*Interpretable weight-space programming builds transparent transformers and brain encoding models*](https://www.alphaxiv.org/pdf/2611.interpretable-weight-space-programming) (2026) · [code](https://github.com/csinva/weight-space-programming-autoresearch)
+- **1.58-Bit Ternary Networks (BitNet b1.58):** Shuming Ma et al., [*The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits*](https://arxiv.org/abs/2402.17764) (2024)
 - **System One Decision Models:** TypeSafe [*System One*](https://docs.typesafe.ai/concepts/system-one.md) (`noul`, `score`, and `choice` typed probability primitives without text generation) and Cloudflare *Clef*
 - **Polyglot Calibration Canon:** Structural circuits and thresholds calibrated against production source from [Redis](https://github.com/redis/redis), [SQLite](https://www.sqlite.org/src), [Lua](https://github.com/lua/lua), [TigerBeetle (`TIGER_STYLE`)](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md), [Go standard library](https://cs.opensource.google/go/go), [Node.js](https://github.com/nodejs/node), [ripgrep](https://github.com/BurntSushi/ripgrep), [OpenBSD](https://github.com/openbsd/src), [LevelDB](https://github.com/google/leveldb), [Starlette](https://github.com/encode/starlette), [Requests](https://github.com/psf/requests), [Hono](https://github.com/honojs/hono), [Svelte](https://github.com/sveltejs/svelte), [HikariCP](https://github.com/brettwooldridge/HikariCP), and [.NET Runtime](https://github.com/dotnet/runtime)

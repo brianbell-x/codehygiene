@@ -1,4 +1,4 @@
-"""Weight-Space Programmed System One model for code readability and hygiene."""
+"""1.58-bit ternary weight-space programmed System One model for code readability and hygiene."""
 
 from __future__ import annotations
 
@@ -6,22 +6,25 @@ import argparse
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 import json
+import math
 import os
 from pathlib import Path
 import sys
 from typing import Any
 import numpy as np
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "ARCHETYPE_NAMES", "MAX_COLS", "MAX_REL_DIST", "Result", "SCORE_NAMES",
     "SQUIGGLE_KINDS", "SQUIGGLE_MESSAGES", "Squiggle", "encode_byte_grid",
     "lint", "load_weights", "main", "render_report", "rl_reward", "score",
+    "unpack_ternary_archive",
 ]
 
 MAX_COLS = 128
 MAX_REL_DIST = 32
 _SKETCH_DIM = 40
+_POW3 = 3 ** np.arange(5, dtype=np.uint8)
 
 _CODE_EXTS = frozenset({
     ".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".c", ".h",
@@ -114,14 +117,24 @@ def _l2_norm(arr: np.ndarray, eps: float = 2.5) -> np.ndarray:
 def _conv1d(cells: np.ndarray, kernel: np.ndarray, bias: np.ndarray) -> np.ndarray:
     num_lines, num_cols, _ = cells.shape
     k_size, _, out_channels = kernel.shape
-    pad = (k_size - 1) // 2
-    padded = np.pad(cells, ((0, 0), (pad, k_size - 1 - pad), (0, 0))) if k_size > 1 else cells
+    active_in = np.flatnonzero(np.any(kernel != 0, axis=(0, 2)))
+    sub_cells = cells[:, :, active_in]
+    sub_kern = np.ascontiguousarray(kernel[:, active_in, :])
 
-    out = np.empty((num_lines, num_cols, out_channels), dtype=np.float32)
-    out[:] = bias
+    pad = (k_size - 1) // 2
+    pad_widths = ((0, 0), (pad, k_size - 1 - pad), (0, 0))
+    padded = np.pad(sub_cells, pad_widths) if k_size > 1 else sub_cells
+    stride_cols = num_cols + k_size - 1
+    flat_in = padded.reshape(-1, len(active_in))
+    span = num_lines * stride_cols - (k_size - 1)
+
+    flat_out = np.empty((num_lines * stride_cols, out_channels), dtype=np.float32)
+    flat_out[:span] = bias
     for offset in range(k_size):
-        out += padded[:, offset : offset + num_cols, :] @ kernel[offset]
-    return out
+        k_slice = sub_kern[offset]
+        if k_slice.any():
+            flat_out[:span] += flat_in[offset : offset + span] @ k_slice
+    return flat_out.reshape(num_lines, stride_cols, out_channels)[:, :num_cols, :]
 
 
 def _sink_attn(
@@ -153,7 +166,7 @@ def _sink_attn(
     return merged @ wo
 
 
-def encode_byte_grid(code: str, max_lines: int = 1024) -> tuple[np.ndarray, list[str]]:
+def encode_byte_grid(code: str, max_lines: int = 2048) -> tuple[np.ndarray, list[str]]:
     """Convert raw source text into a (lines, 128) uint8 grid of 7-bit ASCII codes."""
     lines = (code.expandtabs(2).splitlines() or [""])[:max_lines]
     grid = np.zeros((len(lines), MAX_COLS), dtype=np.uint8)
@@ -228,10 +241,57 @@ def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarra
     return line_probs, noul_probs, subscores, style_probs
 
 
+def unpack_ternary_archive(
+    trit_buf: np.ndarray,
+    vec_buf: np.ndarray,
+    meta_str: str,
+) -> dict[str, np.ndarray]:
+    """Unpack 5-trit-per-byte {-1, 0, +1} matrices and fold 1D per-channel scales."""
+    trit_part, vec_part = meta_str.split("|")
+    vecs: dict[str, np.ndarray] = {}
+    vec_offset = 0
+    for entry in vec_part.split(" ; "):
+        name, dims, count_str = entry.split(":")
+        count = int(count_str)
+        shape = tuple(int(dim) for dim in dims.split(","))
+        vecs[name] = vec_buf[vec_offset : vec_offset + count].reshape(shape).astype(np.float32)
+        vec_offset += count
+
+    unpacked_digits = (((trit_buf[:, None] // _POW3) % 3 + 1) % 3).astype(np.int8) - 1
+    flat_trits = unpacked_digits.ravel()
+    params: dict[str, np.ndarray] = {}
+    byte_offset = 0
+
+    for entry in trit_part.split(" ; "):
+        name, dims, packed_len_str = entry.split(":")
+        packed_len = int(packed_len_str)
+        shape = tuple(int(dim) for dim in dims.split(","))
+        num_elems = math.prod(shape)
+        trit_start = byte_offset * 5
+        mat = flat_trits[trit_start : trit_start + num_elems].reshape(shape).astype(np.float32)
+        byte_offset += packed_len
+
+        scale_key = f"{name[:-2]}_s" if name.endswith("_w") else f"{name}_s"
+        if name == "col_sum_proj":
+            scale_key = "col_sum_s"
+        if scale_key in vecs:
+            mat = mat * vecs[scale_key]
+        params[name] = mat
+
+    for name, val in vecs.items():
+        if not name.endswith("_s"):
+            params[name] = val
+    return params
+
+
 @lru_cache(maxsize=2)
 def load_weights(path: str | Path | None = None) -> dict[str, np.ndarray]:
     target = Path(path) if path else Path(__file__).with_name("weights.npz")
     with np.load(target) as archive:
+        if "trits" in archive.files:
+            return unpack_ternary_archive(
+                archive["trits"], archive["vecs"], str(archive["meta"].item())
+            )
         return {name: archive[name].astype(np.float32) for name in archive.files}
 
 
@@ -354,7 +414,7 @@ def _expand_paths(specs: list[str]) -> list[Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    desc = "A 33 KB, weight-space programmed System One model for code readability and hygiene."
+    desc = "An 11 KB, 1.58-bit ternary weight-space programmed System One model for code hygiene."
     parser = argparse.ArgumentParser(prog="codehygiene", description=desc)
     parser.add_argument("files", nargs="*", help="Files, directories, or globs (stdin if piped)")
     parser.add_argument("-t", "--threshold", type=float, default=0.55, help="Squiggle threshold")
@@ -389,3 +449,7 @@ def main(argv: list[str] | None = None) -> int:
     ]
     print("\n\n".join(reports))
     return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
