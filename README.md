@@ -111,6 +111,24 @@ Evaluated with zero training across a 54-slice production canon (`27` files, `11
 | **Production canon squiggle rate** (`3,513` lines) | `1.99` / 100 lines | **`2.05` / 100 lines** | `+0.06` / 100L |
 | **Clean trap & repository self-lint false positives** | `0` | **`0`** | `0` |
 
+## Agent Corpus Benchmark (GPT-OSS 120B Before / After)
+
+Evaluated in a controlled two-phase agent benchmark where `GPT-OSS 120B (Medium)` first built four dependency-free subsystems and frozen 8-scenario test suites without `codehygiene` (`before/`), then refactored each copy (`after/`) under `codehygiene/SKILL.md` and `codehygiene --check` while keeping all `64 / 64` tests green:
+
+| App | Language | Before Score | After Score | Delta | Squiggles (`B -> A`) | `rl_reward` (`B -> A`) | Tests (`B / A`) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| `billing_python` | Python | `0.466` | **`0.802`** | `+0.336` | `7 -> 0` | `1.1292 -> 1.2058` | `8/8 · 8/8` |
+| `gateway_js` | JavaScript | `0.366` | **`0.912`** | `+0.546` | `5 -> 0` | `1.0961 -> 1.2278` | `8/8 · 8/8` |
+| `checkout_ts` | TypeScript | `0.525` | **`0.908`** | `+0.383` | `9 -> 0` | `1.1414 -> 1.2267` | `8/8 · 8/8` |
+| `matching_rust` | Rust | `0.053` | **`0.800`** | **`+0.748`** | `33 -> 0` | `1.0237 -> 1.2063` | `8/8 · 8/8` |
+| **Mean / Total** | **4 langs** | **`0.352`** | **`0.856`** | **`+0.503`** | **`54 -> 0`** | **`1.0976 -> 1.2167`** | **`64 / 64`** |
+
+```bash
+python3 corpus/evaluate.py --check --run-tests
+```
+
+Full sub-score breakdowns, squiggle distributions, and concrete agent failure modes caught during refactoring are documented in [`corpus/README.md`](corpus/README.md).
+
 ## Build Weights
 
 All `32` ternary `{-1, 0, +1}` matrices (`425,044` trits packed at `5` trits per `uint8` byte, `92.6%` zero) and `3,253` 1D scale/bias scalars in `codehygiene/weights.npz` (`10.52 KiB`) are deterministically generated from `compile.py`:

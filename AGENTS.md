@@ -30,6 +30,8 @@
   - `codehygiene/SKILL.md` — Agent skill definition discovered directly by `npx skills add brianbell-x/codehygiene`.
   - `compile.py` — Deterministic Weight-Space Program that compiles all `32` `{-1, 0, +1}` matrices (`425,044` trits packed at 5 trits/byte) and `3,253` 1D scale/bias scalars into `codehygiene/weights.npz`.
   - `codehygiene/weights.npz` — Compiled `10.52 KiB` (`1.58-bit` ternary) checkpoint loaded at runtime.
+  - `corpus/` — Four-language `GPT-OSS 120B` `before/` vs. `after/` agent benchmark suites (`billing_python`, `gateway_js`, `checkout_ts`, `matching_rust`).
+  - `corpus/evaluate.py` — Cross-platform benchmark runner computing `codehygiene` scores, `rl_reward` deltas, and executing all `64` `before`/`after` unit tests.
 - **Architecture pipeline (`_forward`):**
   1. **Block 0 (Column Prefix & Masking):** `tok_emb (128, 32)` + `col_emb (128, 32)` -> `pre_conv3` -> causal prefix `W_causal1` -> `gate1` (16-quote sawtooth string parity + comment openers) -> `W_causal2` -> `col_fuse` (`52` channels).
   2. **Block 1 (Line Convolutions & Sketches):** Multi-scale column `Conv1D` (`k=3, 7, 13`) + 4-gram SimHash `sketch` (`40` code + `40` comment dims, L2-normalized) + `lmlp1/2` -> `Z` (`L, 192`).
@@ -39,8 +41,9 @@
   - Never hand-edit `codehygiene/weights.npz`; express all behavior changes in `compile.py` and run `python3 compile.py`.
   - Keep `_forward` strictly neural (matrix multiplies, 1D convolutions, elementwise activations, attention). Do not introduce regexes, tokenizers, or AST parsers into inference.
   - Keep runtime dependencies limited to `numpy` with zero OS-specific or native extensions.
-  - Verify self-hygiene before committing:
+  - Verify self-hygiene and corpus gates before committing (`corpus/*/before/` intentionally retains unrefactored Phase 1 baselines):
     ```bash
     python3 compile.py
-    python3 -m codehygiene . --check --no-color
+    python3 -m codehygiene codehygiene compile.py corpus/evaluate.py corpus/billing_python/after corpus/gateway_js/after corpus/checkout_ts/after corpus/matching_rust/after --check --no-color
+    python3 corpus/evaluate.py --check
     ```
