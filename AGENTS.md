@@ -15,6 +15,8 @@
    Pass `--json` to parse `score`, `rl_hygiene`, `scores`, `archetype`, and `squiggles` (`line`, `col_start`, `col_end`, `probability`, `kind`, `message`). Note that passing a single file or `stdin` emits one JSON object, whereas passing a directory or multiple files emits a `{path: Result}` map.
 4. **Shape RL coding rewards:**
    Call `codehygiene.rl_reward(code, tests_passed=passed, weight=0.25)` inside GRPO / PPO / verifier environments. Functional test failure always yields `0.0`.
+5. **Report impact and edge cases:**
+   Capture baseline scores and squiggle counts before editing and re-score after refactoring. Summarize the before/after `score` and squiggle deltas in the handoff, noting which diagnostics genuinely improved the code and flagging any false positives or missed patterns.
 
 ## Modifying or Porting This Repository
 
