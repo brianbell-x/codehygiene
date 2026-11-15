@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codehygiene"
-version = "0.1.0"
+version = "0.2.0"
 description = "A 33 KB, weight-space programmed System One model for linting and scoring code aesthetics."
 readme = "README.md"
 license = {text = "MIT"}

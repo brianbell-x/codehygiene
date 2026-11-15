@@ -23,12 +23,12 @@
 - **Repository map:**
   - `codehygiene/__init__.py` — Pure-NumPy neural inference (`_forward`), byte-grid encoder (`encode_byte_grid`), Python API (`score`, `lint`, `rl_reward`), and CLI (`main`).
   - `compile.py` — Deterministic Weight-Space Program that constructs all 53 `float32` tensors (`427,114` parameters) and writes `codehygiene/weights.npz`.
-  - `codehygiene/weights.npz` — Compiled `32.6 KB` checkpoint loaded at runtime.
+  - `codehygiene/weights.npz` — Compiled `33.0 KB` checkpoint loaded at runtime.
 - **Architecture pipeline (`_forward`):**
   1. **Block 0 (Column Prefix & Masking):** `tok_emb (128, 46)` + `col_emb (128, 46)` -> `pre_conv3` -> causal prefix `W_causal1` -> `gate1` (16-quote sawtooth string parity + comment openers) -> `W_causal2` -> `col_fuse` (`52` channels).
   2. **Block 1 (Line Convolutions & Sketches):** Multi-scale column `Conv1D` (`k=3, 7, 13`) + 4-gram SimHash `sketch` (`40` code + `40` comment dims, L2-normalized) + `lmlp1/2` -> `Z` (`L, 192`).
-  3. **Block 2 (Cross-Line Sink Attention):** Two residual blocks of 8-head relative-position attention (`[-32..+32]` + sink logits `bsink`) and context MLPs (`cmlp1`, `cmlp2`) computing narrator-comment overlap, swallowed-error spans, scale-invariant indentation depth, rhythm walls, and copy-paste clones.
-  4. **Block 3 (System One Heads):** Per-line squiggle head (`sq_w`, 8 kinds) + gated mean/max pooling into `doc1/doc2` (`score`, `rl_hygiene`, 6 four-level spectra, 5 archetypes).
+  3. **Block 2 (Cross-Line Sink Attention):** Two residual blocks of 8-head relative-position attention (`[-32..+32]` + sink logits `bsink`) and context MLPs (`cmlp1`, `cmlp2`) computing narrator-comment overlap, swallowed-error spans, scale-invariant indentation depth, golfed short-name/magic-index clusters, rhythm walls, and copy-paste clones.
+  4. **Block 3 (System One Heads):** Per-line squiggle head (`sq_w`, 8 kinds) + gated mean/max pooling into `doc1/doc2` (`score`, `rl_hygiene`, 6 four-level sub-scores, 5 style archetypes).
 - **Hard invariants:**
   - Never hand-edit `codehygiene/weights.npz`; express all behavior changes in `compile.py` and run `python compile.py`.
   - Keep `_forward` strictly neural (matrix multiplies, 1D convolutions, elementwise activations, attention). Do not introduce regexes, tokenizers, or AST parsers into inference.

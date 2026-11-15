@@ -74,7 +74,7 @@ All inference happens in `_forward()` (`codehygiene/__init__.py`) using standard
 
 1. **2D ASCII Byte Grid (`encode_byte_grid`):** Source text is placed into a `(lines × 128 columns)` grid of 7-bit ASCII bytes, preserving visual indentation, alignment, and line width.
 2. **Left-to-Right String & Comment Masking (`Block 0`):** Causal prefix matrices scan across each line to track quote parity (`"` / `'`) and comment openers (`//`, `# `, `-- `, `/* */`), preventing words inside strings or comments from misfiring code detectors.
-3. **Pattern Convolutions & Word-Stem Sketches (`Block 1`):** Parallel `k=3, 7, 13` convolutions detect control-flow branches, chained operators, and ceremonial naming (`*Factory`, `*Manager`), while 40 SimHash filters sketch 4-letter identifier stems separately in code and comments.
+3. **Pattern Convolutions & Word-Stem Sketches (`Block 1`):** Parallel `k=3, 7, 13` convolutions detect control-flow branches, chained operators, ceremonial naming (`*Factory`, `*Manager`), and golfed short-variable or magic-index soup (`xx = ...`, `[112]`), while 40 SimHash filters sketch 4-letter identifier stems separately in code and comments.
 4. **Cross-Line Sink Attention & Readout (`Blocks 2–3`):** Multi-head attention compares each line against neighbors (`±32` lines) and file-wide indentation statistics—catching comments whose stems repeat the next line's code (`noisy_comment`), swallowed error handlers (`swallowed_error`), duplicated blocks (`duplicate_block`), and deep pyramids (`deep_nesting`)—before pooling into file-level scores.
 
 ## Output Schema (`--json` / `Result.to_dict()`)
@@ -101,7 +101,7 @@ Evaluated with zero training across a 54-slice production canon (`27` files, `11
 | **Annotated squiggle recall** (nesting, ceremony, narrator comments, swallowed errors, clones) | **`100%`** (`14 / 14`) |
 | **Production canon squiggle rate** (`0.00` Rust/C#, `0.51` Go, `2.06` Zig, `2.21` C, `2.31` JS) | **`2.64` / 100 lines** |
 | **Clean trap false positives** (Python comprehensions, `TigerStyle` Zig, terse C, Java builders) | **`0`** |
-| **Runtime footprint & latency** (pure NumPy on CPU, no GPU) | **`32.6 KB` · `~15 ms`** |
+| **Runtime footprint & latency** (pure NumPy on CPU, no GPU) | **`33.0 KB` · `~15 ms`** |
 
 ## Build Weights
 
