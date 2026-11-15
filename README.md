@@ -1,8 +1,8 @@
 # codehygiene
 
-A 33 KB, weight-space programmed System One model for linting and scoring code aesthetics.
+A 33 KB, weight-space programmed System One model that lints and scores code for aesthetics and understandability.
 
-Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `427K`-parameter neural network in pure NumPy (`~15 ms` on CPU) across 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
+Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like cryptic golf or deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `427K`-parameter neural network in pure NumPy (`~15 ms` on CPU) across 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
 
 - **Weight-space programmed:** No training data or gradient descent is used. Every weight in `weights.npz` is compiled directly from explicit mathematical circuits in `compile.py`.
 - **System One judgment:** No text is generated. A single forward pass returns calibrated `0.0–1.0` hygiene scores, 6 style sub-scores, a style archetype, and line-level `Squiggle` diagnostics.
