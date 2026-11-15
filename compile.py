@@ -1343,24 +1343,10 @@ def compile_weights(output_path: Path | None = None) -> dict[str, np.ndarray]:
     return unpack_ternary_archive(trit_buf, vec_buf, meta_str)
 
 
-def sync_skill_bundle(repo_root: Path) -> None:
-    """Mirror standalone runner and ternary weights into `skills/codehygiene/scripts/`."""
-    skill_dir = repo_root / "skills" / "codehygiene"
-    if not skill_dir.is_dir():
-        return
-    scripts_dir = skill_dir / "scripts"
-    scripts_dir.mkdir(parents=True, exist_ok=True)
-    pkg_dir = repo_root / "codehygiene"
-    (scripts_dir / "codehygiene.py").write_bytes((pkg_dir / "__init__.py").read_bytes())
-    (scripts_dir / "weights.npz").write_bytes((pkg_dir / "weights.npz").read_bytes())
-
-
 if __name__ == "__main__":
-    root_dir = Path(__file__).resolve().parent
-    out_file = root_dir / "codehygiene" / "weights.npz"
+    out_file = Path(__file__).with_name("codehygiene") / "weights.npz"
     trits_raw, vecs_raw = compile_ternary_tensors()
     compile_weights(out_file)
-    sync_skill_bundle(root_dir)
     size_kb = out_file.stat().st_size / 1024
     num_trits = sum(arr.size for arr in trits_raw.values())
     num_vecs = sum(arr.size for arr in vecs_raw.values())

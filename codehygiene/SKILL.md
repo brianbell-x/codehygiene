@@ -10,14 +10,14 @@ Passing tests, typecheckers, and formatters (`ruff`, `eslint`, `prettier`, `rust
 
 ## Run It
 
-`scripts/codehygiene.py` and `scripts/weights.npz` (`10.5 KiB` `1.58-bit` ternary model) are bundled offline next to this `SKILL.md`. Replace `<SKILL_DIR>` with the directory containing this file:
+The runtime (`__init__.py`, `__main__.py`) and `weights.npz` (`10.5 KiB` `1.58-bit` ternary model) live directly inside `<SKILL_DIR>` (the directory containing this `SKILL.md`):
 
 ```bash
-python3 "<SKILL_DIR>/scripts/codehygiene.py" <touched-files> --check
+python3 "<SKILL_DIR>" <touched-files> --check
 ```
 
-- Windows PowerShell / `cmd` (where `python` is standard): `python "<SKILL_DIR>/scripts/codehygiene.py" <touched-files> --check`
-- No global `numpy`: `uv run --with numpy "<SKILL_DIR>/scripts/codehygiene.py" <touched-files> --check`
+- Windows PowerShell / `cmd` (where `python` is standard): `python "<SKILL_DIR>" <touched-files> --check`
+- No global `numpy`: `uv run --with numpy "<SKILL_DIR>/__init__.py" <touched-files> --check`
 - Installed on `PATH`: `codehygiene <touched-files> --check`
 - Structured output for batch fixes: pass `--json` (or pipe unsaved snippets via `stdin`).
 
@@ -47,7 +47,7 @@ Supported extensions (`11` languages): `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.mj
 
 - **Never skip because tests or linters passed.** Syntax linters do not detect AI slop, ceremony, swallowed errors, or variable golf.
 - **Never skip for "small" edits, scripts, or test files.** Quick patches are where swallowed exceptions, narrator comments, and 2-letter variable golf appear most often.
-- **Never claim the tool is unavailable.** The runtime and `10.5 KiB` weights live right beside this `SKILL.md` and run offline in `~10 ms`.
+- **Never claim the tool is unavailable.** The runtime and `10.5 KiB` weights live right inside `<SKILL_DIR>` and run offline in `~10 ms`.
 - **Never game the score.** Do not shorten clear names into 2-letter abbreviations, cram multiple statements onto one line, strip real error handling, or raise `-t` / `--threshold` above `0.55` to force a `0` exit code.
 - **Legacy files with pre-existing debt:** Zero squiggles are permitted in any file created in this task or in any function/region touched in this turn. When untouched lines far outside edit scope fail `--check`, verify via `--json` that zero squiggles remain in touched regions and report the untouched legacy line numbers explicitly.
 - **Never eyeball instead of executing.** Run the command in this turn and verify the actual output before responding.

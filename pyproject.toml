@@ -18,4 +18,4 @@ codehygiene = "codehygiene:main"
 include = ["codehygiene*"]
 
 [tool.setuptools.package-data]
-codehygiene = ["weights.npz"]
+codehygiene = ["weights.npz", "SKILL.md"]
