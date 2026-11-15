@@ -55,6 +55,19 @@ reward = codehygiene.rl_reward(code, tests_passed=True, weight=0.25)
 
 Diagnostic `kind` values: `nesting_pyramid`, `naming_ceremony`, `narrator_comment`, `defensive_slop`, `clever_chaining`, `special_case_wart`, `copy_paste_clone`, `rhythm_clash`.
 
+## Benchmarks
+
+Evaluated with zero training across a 54-slice production canon (`27` files, `11` languages) and an 18-case annotated diagnostic suite:
+
+| Evaluation | Result |
+| :--- | :--- |
+| **Polyglot canon vs. slop AUROC** (`27` production files, `11` languages) | **`0.985`** |
+| **Controlled diagnostic AUROC** (`18` cases: clean mean `0.903` vs. slop mean `0.060`) | **`1.000`** |
+| **Annotated squiggle recall** (nesting, ceremony, narrator comments, swallowed errors, clones) | **`100%`** (`14 / 14`) |
+| **Production canon squiggle rate** (`0.00` Rust/C#, `0.51` Go, `2.06` Zig, `2.21` C, `2.31` JS) | **`2.64` / 100 lines** |
+| **Clean trap false positives** (Python comprehensions, `TigerStyle` Zig, terse C, Java builders) | **`0`** |
+| **Runtime footprint & latency** (pure NumPy on CPU, no GPU) | **`32.6 KB` · `~15 ms`** |
+
 ## Build Weights
 
 All 53 float32 tensors in `codehygiene/weights.npz` are deterministically generated from closed-form circuits in `compile.py`:
