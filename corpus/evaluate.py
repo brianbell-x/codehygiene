@@ -1,4 +1,4 @@
-"""Evaluate before/after codehygiene metrics and test suites across the agent corpus."""
+"""Evaluate before/after codehygiene metrics, test suites, and regression cases across the corpus."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ sys.dont_write_bytecode = True
 
 CORPUS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = CORPUS_DIR.parent
+REGRESSION_DIR = CORPUS_DIR / "regressions"
 
 
 @lru_cache(maxsize=1)
@@ -262,6 +263,52 @@ def check_gate(apps: list[dict[str, Any]], include_tests: bool) -> list[str]:
     return failures
 
 
+def check_line_case(case: dict[str, Any]) -> dict[str, Any]:
+    source = (REGRESSION_DIR / case["file"]).read_text(encoding="utf-8")
+    result = load_hygiene_module().score(source)
+    found = sorted([sq.line, sq.kind] for sq in result.squiggles)
+    expected = sorted(case["expect"])
+    return {
+        "case": case["file"],
+        "weakness": case["weakness"],
+        "expected": expected,
+        "found": found,
+        "passed": found == expected,
+    }
+
+
+def check_density_case(case: dict[str, Any]) -> dict[str, Any]:
+    hygiene = load_hygiene_module()
+    issues = (REGRESSION_DIR / case["issues"]).read_text(encoding="utf-8")
+    filler = (REGRESSION_DIR / case["filler"]).read_text(encoding="utf-8")
+    scores = [
+        round(hygiene.score(issues + filler * count).score, 4) for count in case["repeats"]
+    ]
+    rising = all(low < high for low, high in zip(scores, scores[1:]))
+    return {
+        "case": case["issues"],
+        "weakness": case["weakness"],
+        "expected": f"rising scores ending >= {case['min_score']:.2f}",
+        "found": scores,
+        "passed": rising and scores[-1] >= case["min_score"],
+    }
+
+
+def evaluate_regressions() -> list[dict[str, Any]]:
+    manifest = json.loads((REGRESSION_DIR / "cases.json").read_text(encoding="utf-8"))
+    results = [check_line_case(case) for case in manifest["line_cases"]]
+    results.extend(check_density_case(case) for case in manifest["density_cases"])
+    return results
+
+
+def format_regression_report(results: list[dict[str, Any]]) -> str:
+    lines = ["| Regression Case | Expected | Found | Status |", "| :--- | :--- | :--- | :---: |"]
+    for item in results:
+        status = "pass" if item["passed"] else "FAIL"
+        lines.append(f"| `{item['case']}` | `{item['expected']}` | `{item['found']}` | {status} |")
+    return "\n".join(lines)
+
+
 def build_app_row(item: dict[str, Any], include_tests: bool) -> str:
     bef = item["before"]
     aft = item["after"]
@@ -348,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Exit 1 unless all after files pass 0 squiggles, score >= 0.80, and improve",
+        help="Exit 1 unless after files and regression cases pass (0 squiggles, score >= 0.80)",
     )
     parser.add_argument(
         "--run-tests",
@@ -359,18 +406,27 @@ def main(argv: list[str] | None = None) -> int:
 
     apps = [evaluate_app(spec, args.run_tests) for spec in APPS]
     summary = summarize_corpus(apps, args.run_tests)
+    regressions = evaluate_regressions()
     failures = check_gate(apps, args.run_tests)
+    failures.extend(
+        f"regression {item['case']}: found {item['found']}, expected {item['expected']}"
+        for item in regressions
+        if not item["passed"]
+    )
 
     if args.json:
         payload = {
             "apps": apps,
             "summary": summary,
+            "regressions": regressions,
             "passed_check": len(failures) == 0,
             "failures": failures,
         }
         print(json.dumps(payload, indent=2))
     else:
         print(format_markdown_report(apps, summary, args.run_tests))
+        print()
+        print(format_regression_report(regressions))
         for msg in failures:
             print(f"FAIL: {msg}", file=sys.stderr)
 

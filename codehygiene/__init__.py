@@ -13,7 +13,7 @@ import sys
 from typing import Any
 import numpy as np
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 __all__ = [
     "ARCHETYPE_NAMES", "MAX_COLS", "MAX_REL_DIST", "Result", "SCORE_NAMES",
     "SQUIGGLE_KINDS", "SQUIGGLE_MESSAGES", "Squiggle", "encode_byte_grid",
@@ -432,6 +432,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.files and sys.stdin.isatty():
         parser.print_help()
         return 0
+    for stream in (sys.stdin, sys.stdout):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     paths = _expand_paths(args.files)
     targets = [(path.as_posix(), path.read_text("utf-8", "replace")) for path in paths]
     if not args.files:

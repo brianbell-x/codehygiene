@@ -8,58 +8,64 @@ Four independent subsystems were built in Python, JavaScript (ESM), TypeScript, 
 
 1. **Phase 1 — Blind Functional Baseline (`before/`):** `GPT-OSS 120B (Medium)` implemented each subsystem (`205–333` LOC) together with an 8-scenario unit test suite while `codehygiene` (`SKILL.md` and CLI) was completely withheld. Once all `8/8` tests passed, both `before/<module>` and the shared test harness were frozen.
 2. **Phase 2 — Skill-Gated Refactor (`after/`):** Each frozen baseline was copied to `after/<module>`, `codehygiene/SKILL.md` was provided, and refactoring was gated by `codehygiene <after-file> --check` (`0` squiggles at `threshold = 0.55`, `score >= 0.80`) alongside the unmodified 8-test suite (`32` baseline + `32` refactored = `64/64` total test executions).
-3. **Independent Verification:** File modification timestamps on `before/`, public symbol signatures, test equivalence across `before` and `after`, and deterministic `codehygiene` scores and `rl_reward` values were audited independently via [`evaluate.py`](evaluate.py).
+3. **Scoring Version:** The `after/` files were produced under the `v0.4.0` gate and are frozen. Every number below is computed with `v0.4.1`, whose file `score` follows squiggle density instead of file length, so `before/` files with `2.1` to `3.5` squiggles per 100 lines score near `0.8`.
+4. **Independent Verification:** File modification timestamps on `before/`, public symbol signatures, test equivalence across `before` and `after`, and deterministic `codehygiene` scores and `rl_reward` values were audited independently via [`evaluate.py`](evaluate.py).
 
 ## Quantitative Summary
 
 | App | Lang | Before Score | After Score | Delta | Before `rl_hygiene` | After `rl_hygiene` | Before `rl_reward` | After `rl_reward` | Squiggles (`B -> A`) | Style (`B -> A`) | LOC (`B -> A`) | Tests (`B / A`) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| [`billing_python`](billing_python/) | Python | `0.466` | **`0.802`** | **`+0.336`** | `0.568` | `0.845` | `1.1292` | `1.2058` | `7 -> 0` | `clean (34%) -> minimal (48%)` | `333 -> 275` | `8/8 · 8/8` |
-| [`gateway_js`](gateway_js/) | JavaScript | `0.366` | **`0.912`** | **`+0.546`** | `0.402` | `0.910` | `1.0961` | `1.2278` | `5 -> 0` | `slop (44%) -> minimal (57%)` | `205 -> 194` | `8/8 · 8/8` |
-| [`checkout_ts`](checkout_ts/) | TypeScript | `0.525` | **`0.908`** | **`+0.383`** | `0.606` | `0.905` | `1.1414` | `1.2267` | `9 -> 0` | `minimal (31%) -> minimal (56%)` | `229 -> 236` | `8/8 · 8/8` |
-| [`matching_rust`](matching_rust/) | Rust | `0.053` | **`0.800`** | **`+0.748`** | `0.136` | `0.850` | `1.0237` | `1.2063` | `33 -> 0` | `slop (74%) -> clean (48%)` | `312 -> 488` | `8/8 · 8/8` |
-| **Mean / Total** | **4 langs** | **`0.352`** | **`0.856`** | **`+0.503`** | **`0.428`** | **`0.878`** | **`1.0976`** | **`1.2167`** | **`54 -> 0`** | — | **`1,079 -> 1,193`** | **`64 / 64`** |
+| [`billing_python`](billing_python/) | Python | `0.814` | **`0.848`** | **`+0.034`** | `0.830` | `0.877` | `1.2054` | `1.2156` | `7 -> 0` | `minimal (47%) -> minimal (50%)` | `333 -> 275` | `8/8 · 8/8` |
+| [`gateway_js`](gateway_js/) | JavaScript | `0.825` | **`0.912`** | **`+0.087`** | `0.821` | `0.911` | `1.2058` | `1.2278` | `5 -> 0` | `minimal (51%) -> minimal (57%)` | `205 -> 194` | `8/8 · 8/8` |
+| [`checkout_ts`](checkout_ts/) | TypeScript | `0.770` | **`0.904`** | **`+0.134`** | `0.767` | `0.900` | `1.1921` | `1.2256` | `8 -> 0` | `minimal (47%) -> minimal (56%)` | `229 -> 236` | `8/8 · 8/8` |
+| [`matching_rust`](matching_rust/) | Rust | `0.162` | **`0.868`** | **`+0.705`** | `0.356` | `0.889` | `1.0648` | `1.2195` | `33 -> 0` | `slop (44%) -> minimal (49%)` | `312 -> 488` | `8/8 · 8/8` |
+| **Mean / Total** | **4 langs** | **`0.643`** | **`0.883`** | **`+0.240`** | **`0.694`** | **`0.894`** | **`1.1670`** | **`1.2221`** | **`53 -> 0`** | — | **`1,079 -> 1,193`** | **`64 / 64`** |
 
-Across the four subsystems, enforcing the `codehygiene` gate raised mean overall `score` by **`+0.503`** (`0.3525 -> 0.8556`, **`2.43x`**), raised mean `rl_hygiene` by **`+0.449`** (`0.4283 -> 0.8777`), eliminated **`100%` of line-level squiggles (`54 -> 0`)**, and increased test-gated `rl_reward` by **`+0.1191`** (`1.0976 -> 1.2167`, capturing `47.6%` of the maximum `0.25` hygiene bonus span) with zero test regressions.
+Across the four subsystems, enforcing the `codehygiene` gate raised mean overall `score` by **`+0.240`** (`0.6429 -> 0.8831`, **`1.37x`**), raised mean `rl_hygiene` by **`+0.201`** (`0.6935 -> 0.8942`), eliminated **`100%` of line-level squiggles (`53 -> 0`)**, and increased test-gated `rl_reward` by **`+0.0551`** (`1.1670 -> 1.2221`, capturing `22.0%` of the maximum `0.25` hygiene bonus span) with zero test regressions.
 
 ## Sub-Score Breakdown (`Before -> After`)
 
 | App | `flatness` | `naming` | `simplicity` | `comments` | `error_handling` | `layout` |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| `billing_python` | `0.76 -> 0.92` | `0.92 -> 0.92` | `0.91 -> 0.92` | `0.72 -> 0.91` | `0.92 -> 0.92` | `0.89 -> 0.87` |
-| `gateway_js` | `0.93 -> 0.93` | `0.93 -> 0.93` | `0.80 -> 0.93` | `0.76 -> 0.93` | `0.81 -> 0.93` | `0.93 -> 0.93` |
-| `checkout_ts` | `0.93 -> 0.93` | `0.93 -> 0.93` | `0.79 -> 0.93` | `0.71 -> 0.93` | `0.93 -> 0.93` | `0.93 -> 0.93` |
-| `matching_rust` | `0.60 -> 0.92` | `0.92 -> 0.92` | `0.47 -> 0.91` | `0.69 -> 0.92` | `0.92 -> 0.92` | `0.87 -> 0.87` |
+| `billing_python` | `0.92 -> 0.92` | `0.92 -> 0.92` | `0.92 -> 0.92` | `0.86 -> 0.92` | `0.92 -> 0.92` | `0.92 -> 0.89` |
+| `gateway_js` | `0.93 -> 0.93` | `0.93 -> 0.93` | `0.92 -> 0.93` | `0.89 -> 0.93` | `0.91 -> 0.93` | `0.93 -> 0.93` |
+| `checkout_ts` | `0.93 -> 0.93` | `0.93 -> 0.93` | `0.90 -> 0.93` | `0.82 -> 0.93` | `0.93 -> 0.93` | `0.93 -> 0.93` |
+| `matching_rust` | `0.52 -> 0.92` | `0.92 -> 0.92` | `0.76 -> 0.92` | `0.80 -> 0.92` | `0.92 -> 0.92` | `0.86 -> 0.92` |
 
 ## Phase 1 Squiggle Distribution by `kind`
 
 | Squiggle `kind` | `billing_python` | `gateway_js` | `checkout_ts` | `matching_rust` | Phase 1 Total | Phase 2 Total |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| `noisy_comment` | `6` | `2` | `7` | `8` | **`23`** | **`0`** |
+| `noisy_comment` | `6` | `2` | `6` | `8` | **`22`** | **`0`** |
 | `deep_nesting` | `1` | `0` | `0` | `15` | **`16`** | **`0`** |
 | `dense_line` | `0` | `1` | `2` | `8` | **`11`** | **`0`** |
 | `swallowed_error` | `0` | `2` | `0` | `0` | **`2`** | **`0`** |
 | `duplicate_block` | `0` | `0` | `0` | `2` | **`2`** | **`0`** |
-| **Total Squiggles** | **`7`** | **`5`** | **`9`** | **`33`** | **`54`** | **`0`** |
+| **Total Squiggles** | **`7`** | **`5`** | **`8`** | **`33`** | **`53`** | **`0`** |
 
 ## Observed Failure Modes in Ungated Agent Output
 
-1. **Passing Unit Tests Over Structural Slop (`matching_rust`, `0.053 -> 0.800`):**
-   - `matching_rust/before/matching.rs` satisfied all 8 order-book scenarios (`Limit`, `Market`, `IOC`, `FOK`, self-trade prevention, cancel, modify) while scoring **`0.053`** (`slop`, `74%`) with `33` squiggles and `7` `rustc` dead-code warnings.
-   - Five-level nested `for / for / if / match` control-flow pyramids inside `match_order` and `can_fully_fill` drove `flatness` down to `0.60` and `simplicity` down to `0.47`, accompanied by `121`-column single-line nested `if let` cleanup chains (`Side::Buy => { if let Some(q) = ... }`).
-   - Decomposing matching into focused two-level methods (`match_against_book`, `match_at_price`, `match_maker`, `reject_self_trade`, `available_at_price`, `cleanup_price_level`) eliminated all `33` squiggles and lifted `rl_reward` from `1.0237` to `1.2063` (`+0.1826`).
-2. **Unreachable Copy-Pasted Dead Code & API Drift (`billing_python`, `0.466 -> 0.802`):**
+1. **Passing Unit Tests Over Structural Slop (`matching_rust`, `0.162 -> 0.868`):**
+   - `matching_rust/before/matching.rs` satisfied all 8 order-book scenarios (`Limit`, `Market`, `IOC`, `FOK`, self-trade prevention, cancel, modify) while scoring **`0.162`** (`slop`, `44%`) with `33` squiggles and `7` `rustc` dead-code warnings.
+   - Five-level nested `for / for / if / match` control-flow pyramids inside `match_order` and `can_fully_fill` drove `flatness` down to `0.52` and `simplicity` down to `0.76`, accompanied by `121`-column single-line nested `if let` cleanup chains (`Side::Buy => { if let Some(q) = ... }`).
+   - Decomposing matching into focused two-level methods (`match_against_book`, `match_at_price`, `match_maker`, `reject_self_trade`, `available_at_price`, `cleanup_price_level`) eliminated all `33` squiggles and lifted `rl_reward` from `1.0648` to `1.2195` (`+0.1547`).
+2. **Unreachable Copy-Pasted Dead Code & API Drift (`billing_python`, `0.814 -> 0.848`):**
    - `billing_python/before/billing.py` passed `8/8` tests while leaving a **19-line unreachable duplicate body** directly below `return sub` inside `BillingSystem.create_subscription` (`lines 191–209`), alongside 4-level dunning retry nesting (`line 270`) and six restating comments.
    - Phase 2 deleted the dead duplicate block, flattened `pay_invoice` with early guard returns, stripped redundant narration, and preserved exact public method parity (`Subscription.current_plan`, `Invoice.to_payload`, and `BillingSystem.change_plan(..., effective_date=None)`).
-3. **Silent Fallback Masking & One-Line Logging Walls (`gateway_js`, `0.366 -> 0.912`):**
-   - `gateway_js/before/gateway.mjs` passed all 8 gateway tests while scoring `0.366` (`slop`, `44%`), masking missing inputs via `|| []` / `|| {}` (`swallowed_error`) and repeating `113`-character inline `logStructured(...)` calls (`dense_line`).
-   - Refactoring normalized defaults at the parameter destructuring boundary, validated unknown tenant tiers explicitly via `Array.isArray(perms)` (fixing a `TypeError` crash when `|| []` was naively deleted), and extracted `respondError`, raising `score` by `+0.546` (`0.912`).
-4. **Step-Numbered Narrator Comments & Nested Ternaries (`checkout_ts`, `0.525 -> 0.908`):**
-   - `checkout_ts/before/checkout.ts` littered `processOrder` and helpers with `// 1. ...` through `// 7. ...` step narration (`7` `noisy_comment` squiggles), a nested carrier-rate ternary (`line 82`), and a `133`-column error return object (`line 215`).
-   - Replacing the nested ternary with explicit branching, wrapping return literals cleanly, and removing redundant comments lifted `score` from `0.525` to `0.908` (`+0.383`).
+3. **Silent Fallback Masking & One-Line Logging Walls (`gateway_js`, `0.825 -> 0.912`):**
+   - `gateway_js/before/gateway.mjs` passed all 8 gateway tests while carrying `5` squiggles (`0.825`, `minimal`, `51%`), masking missing inputs via `|| []` / `|| {}` (`swallowed_error`) and repeating `113`-character inline `logStructured(...)` calls (`dense_line`).
+   - Refactoring normalized defaults at the parameter destructuring boundary, validated unknown tenant tiers explicitly via `Array.isArray(perms)` (fixing a `TypeError` crash when `|| []` was naively deleted), and extracted `respondError`, raising `score` by `+0.087` (`0.912`).
+4. **Step-Numbered Narrator Comments & Nested Ternaries (`checkout_ts`, `0.770 -> 0.904`):**
+   - `checkout_ts/before/checkout.ts` littered `processOrder` and helpers with `// 1. ...` through `// 7. ...` step narration (`6` `noisy_comment` squiggles), a nested carrier-rate ternary (`line 82`), and a `133`-column error return object (`line 215`).
+   - Replacing the nested ternary with explicit branching, wrapping return literals cleanly, and removing redundant comments lifted `score` from `0.770` to `0.904` (`+0.134`).
+   - `v0.4.0` also flagged the units comment `// approximate weight: 0.5kg per item unit` (`before/checkout.ts` line `211`), and the gated refactor deleted it, leaving a bare `0.5`. `v0.4.1` no longer flags that comment ([`regressions/why_comment_units.ts`](regressions/why_comment_units.ts)); the frozen `after/` file still lacks it.
 5. **Agent-Loop Failure Modes Caught by `--check` & Audit:**
    - During multi-turn execution, open-weights workers occasionally halted after compiling test binaries without executing them, typed plausible-looking hygiene summaries in prose without running the CLI, or introduced subtle refactor regressions (duplicate `return resp;` statements or renamed helper methods not covered by unit tests).
    - Pairing `codehygiene --check` (`~10 ms` deterministic exit code) with automated test execution inside `corpus/evaluate.py --check --run-tests` rejected incomplete turns mechanically without LLM-judge latency.
+
+## Regression Cases
+
+[`regressions/`](regressions/) holds minimal inputs for weaknesses measured on `v0.4.0` (a `raise` labelled `swallowed_error`, why-comments flagged as `noisy_comment`, C `# define` read as a comment, and file-length bias in `score`) plus controls that must keep firing. `evaluate.py --check` scores them against [`regressions/cases.json`](regressions/cases.json) and fails on any difference.
 
 ## Reproducing the Benchmark
 

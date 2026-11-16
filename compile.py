@@ -1,7 +1,7 @@
 """Closed-form 1.58-bit Ternary Weight-Space Program compiling circuits into weights.npz.
 
 Every 2D/3D weight, convolution, projection, causal, and embedding tensor in the model
-has entries strictly in {-1, 0, +1} (569,662 trits packed at 5 trits per uint8 byte,
+has entries strictly in {-1, 0, +1} (594,974 trits packed at 5 trits per uint8 byte,
 1.60 bits/weight), paired only with 1D per-output-channel scales and biases:
   - Block 0 (_build_block0): Maps (L, 128) ASCII bytes + column positions into 52 per-cell
     channels (HC_*), using causal prefix matrices and De Morgan closer gates to mask strings
@@ -11,7 +11,8 @@ has entries strictly in {-1, 0, +1} (569,662 trits packed at 5 trits per uint8 b
   - Block 2 (_build_block2_and_heads): Two cross-line sink-attention + MLP passes using
     Paley Hadamard and Gram-fitted ternary projections populate context and issue registers.
   - Block 3 (_build_block2_and_heads): Projects Z into 8 per-line squiggle probabilities
-    and balanced-ternary System One document heads (31 logits).
+    and balanced-ternary System One document heads (31 logits) that read issue density
+    (gated mean over active lines), so the file score does not depend on file length.
 """
 
 from __future__ import annotations
@@ -77,8 +78,8 @@ N_PREF2 = 4
 N_LMLP2 = 146
 N_Z = 226
 (
-    Z_ACTIVE, Z_HAS_CODE, Z_PURE_COMMENT, Z_OPEN_NET, Z_INDENT,
-    Z_DEPTH8, Z_DEPTH10, Z_DEPTH12, Z_ODD_INDENT, Z_MOD4_EQ2, Z_MOD4_EQ0,
+    Z_ACTIVE, Z_HAS_CODE, Z_PURE_COMMENT, Z_OPEN_NET, Z_HASH_COMMENT,
+    Z_DIRECTIVE, Z_DEPTH10, Z_DEPTH12, Z_ODD_INDENT, Z_MOD4_EQ2, Z_MOD4_EQ0,
     Z_BRANCH_OPEN, Z_ELSE_BRANCH, Z_EARLY_EXIT, Z_GUARD_CLAUSE,
     Z_HARDCODED_CASE, Z_CEREMONY, Z_LONG_IDENT, Z_ONE_CHAR_ID, Z_WORD_COUNT,
 ) = range(20)
@@ -94,10 +95,10 @@ N_Z = 226
 # Cross-line attention context registers (Z[40..63]) and SimHash slices (Z[148..228])
 (
     Z_RESTATES_CODE, Z_NEAR_REAL_HANDLER, Z_NEAR_EMPTY_HANDLER,
-    Z_ENCLOSING_DEPTH, Z_ENCLOSING_BRANCHES, Z_ENCLOSING_GUARDS,
+    Z_COMMENT_BLOCK, Z_ENCLOSING_BRANCHES, Z_ENCLOSING_GUARDS,
     Z_LOCAL_STMT_DENSITY, Z_LOCAL_BREAK_DENSITY, Z_DISTANT_CLONE,
-    Z_LOCAL_SPECIAL_CASES, Z_LOCAL_ODD_INDENT, Z_ENCLOSING_DEEP16,
-    Z_FILE_ONE_CHAR, Z_FILE_WORDS, Z_LOCAL_CHAINING, Z_LOCAL_CEREMONY,
+    Z_LOCAL_SPECIAL_CASES, Z_PREPROC_LINE, Z_ENCLOSING_DEEP16,
+    Z_FILE_ONE_CHAR, Z_FILE_WORDS, Z_PROSE_COMMENT, Z_LOCAL_CEREMONY,
     Z_FILE_MOD4_0, Z_FILE_MOD4_2, Z_FILE_ODD_IND,
     Z_LOCAL_SHORT_GOLF, Z_LOCAL_MAGIC_NUM,
     Z_FMOD42_DUP, Z_FODD_DUP, Z_FODD_SCALED,
@@ -582,6 +583,9 @@ _K13_PRIMARY = (
 
 _K13_EXTENDED = (("#include", 1), ("except Excep", 1), ("except BaseE", 1))
 
+# Unspaced line-lead C preprocessor directives: evidence that `# ` lines are not comments
+_K13_PREPROC = ("#define", "#ifndef", "#ifdef", "#endif")
+
 _K13_V04_CODE = (
     ("function ", 1, 0, 1), (": string", 0, 1, 1), (": number", 0, 1, 1),
     (": boolean", 0, 1, 1), (": float", 0, 1, 1), (": Record<", 0, 0, 1),
@@ -716,6 +720,27 @@ def _build_block1(
         _sub_filter(conv3_w, conv3_s, conv3_b, ch_i, pat, code=False, comm=True)
         feat[f"c:{pat}"] = off_c3 + ch_i
 
+    # Line-lead `# ` opener, block-comment cell count, quantity cues (`0.5`, `5kg`) in comments,
+    # and letters inside line comments (prose, as opposed to `# -----` rules)
+    ch_hash_lead, ch_block_cells, ch_decimal, ch_unit, ch_letters = 32, 33, 34, 35, 36
+    _stamp_char(conv3_w, 1, ch_hash_lead, "#")
+    _stamp_char(conv3_w, 2, ch_hash_lead, " ")
+    conv3_w[1, HC_FNS, ch_hash_lead] = 1
+    conv3_s[ch_hash_lead], conv3_b[ch_hash_lead] = 2.0, -29.0
+    conv3_w[1, [HC_COMM, HC_SL_C], ch_block_cells] = [1, -1]
+
+    quantity_gain = 3.0
+    conv3_w[[0, 1, 1, 2], [HC_DIG, HC_DOT, HC_SL_C, HC_DIG], ch_decimal] = 1
+    conv3_s[ch_decimal], conv3_b[ch_decimal] = 2.0 * quantity_gain, -7.0 * quantity_gain
+    conv3_w[0, [HC_LO, HC_UP], ch_unit] = -1
+    conv3_w[[1, 1, 2], [HC_DIG, HC_SL_C, HC_LO], ch_unit] = 1
+    conv3_s[ch_unit], conv3_b[ch_unit] = 2.0 * quantity_gain, -5.0 * quantity_gain
+    conv3_w[1, [HC_LO, HC_UP, HC_SL_C], ch_letters] = 1
+    conv3_s[ch_letters], conv3_b[ch_letters] = 2.0, -3.0
+    custom_comm_names = ("hash_lead", "block_comm_cells", "c:decimal", "c:unit", "comment_letters")
+    for ch_i, name in enumerate(custom_comm_names, 32):
+        feat[name] = off_c3 + ch_i
+
     conv7_w = np.zeros((7, N_HC, n_conv7), dtype=np.int8)
     conv7_s = np.ones((n_conv7,), dtype=np.float32)
     conv7_b = np.zeros((n_conv7,), dtype=np.float32)
@@ -821,6 +846,10 @@ def _build_block1(
         _sub_filter(conv13_w, conv13_s, conv13_b, ch_i, pat, code=False, comm=True, cs=cs)
         feat[f"c:{pat}"] = off_c13 + ch_i
 
+    for ch_i, pat in enumerate(_K13_PREPROC, 75):
+        _sub_filter(conv13_w, conv13_s, conv13_b, ch_i, pat, cs=1, lead=1)
+        feat[pat] = off_c13 + ch_i
+
     # Declarative line-level rules compiled into strictly {-1, 0, +1} lmlp1_w & lmlp2_w
     module_headers = [
         ("from ", -3.0), ("use ", -3.0), ("import ", -3.0),
@@ -863,6 +892,11 @@ def _build_block1(
         ("#[allow(", 0.7), ("eslint-disabl", 2.0), ("@ts-ignore", 2.0), ("?.", 0.45),
         (" as any", 1.8), ("as unknown", 1.8), ("cast(Any", 1.8),
         ("c:pyright: ign", 1.8), ("c:biome-ignore", 1.8),
+        ("raise", -1.8), ("throw", -1.8),
+    ]
+    directive_terms = [(name, 1.0) for name in ("#include", *_K13_PREPROC)]
+    restate_exempt_terms = [
+        ("comment_chars", -0.25), ("code_chars", -5.0), ("c:decimal", -5.0), ("c:unit", -5.0),
     ]
 
     line_rules: list[tuple[list[tuple[str, float]], float, int, float]] = [
@@ -871,8 +905,8 @@ def _build_block1(
         ([("code_chars", 1.0)], -1.0, Z_HAS_CODE, -1.0),
         ([("comment_chars", 1.0), ("code_chars", -5.0)], -2.0, Z_PURE_COMMENT, 1.0),
         ([("comment_chars", 1.0), ("code_chars", -5.0)], -3.0, Z_PURE_COMMENT, -1.0),
-        ([("comment_chars", -0.25), ("code_chars", -5.0)], 11.0, Z_SHORT_COMMENT, 1.0),
-        ([("comment_chars", -0.25), ("code_chars", -5.0)], 10.0, Z_SHORT_COMMENT, -1.0),
+        (restate_exempt_terms, 11.0, Z_SHORT_COMMENT, 1.0),
+        (restate_exempt_terms, 10.0, Z_SHORT_COMMENT, -1.0),
 
         ([("comment_mask", 1.0), ("code_chars", -5.0)], -2.0, Z_PARAGRAPH_BREAK, 1.0),
         ([("comment_mask", 1.0), ("code_chars", -5.0)], -3.0, Z_PARAGRAPH_BREAK, -1.0),
@@ -880,8 +914,10 @@ def _build_block1(
         ([("open_braces", 1.0), ("close_braces", 1.0), ("code_chars", -0.4)], 0.2, Z_OPEN_NET, 1.0),
         ([("open_braces", 1.0), ("close_braces", 1.0), ("code_chars", -0.4)], -0.8, Z_OPEN_NET, -1.0),
 
-        ([("indent_cols", 1.0)], 0.0, Z_INDENT, 1.0),
-        ([("depth_ge8", 1.0)], 0.0, Z_DEPTH8, 1.0),
+        ([("hash_lead", 1.0)], 0.0, Z_HASH_COMMENT, 1.0),
+        ([("comment_letters", 1.0), ("code_chars", -5.0)], -2.0, Z_PROSE_COMMENT, 1.0),
+        ([("comment_letters", 1.0), ("code_chars", -5.0)], -3.0, Z_PROSE_COMMENT, -1.0),
+        (directive_terms, 0.0, Z_DIRECTIVE, 1.0),
         ([("depth_ge10", 1.0)], 0.0, Z_DEPTH10, 1.0),
         ([("depth_ge12", 1.0)], 0.0, Z_DEPTH12, 1.0),
         ([("odd_indent", 1.0)], 0.0, Z_ODD_INDENT, 1.0),
@@ -926,7 +962,8 @@ def _build_block1(
         ([("cols_ge80", 1.0)], -0.45, Z_OVER_80, 1.0),
         ([("cols_ge96", 1.2), ("cols_ge110", 1.5)], -0.35, Z_OVER_96, 1.2),
         ([("step 1", 3.2), ("step 2", 3.2), ("step 3", 3.2), ("todo:", 2.2), ("fixme:", 2.2),
-          ("initial", 1.3), ("loop th", 1.5), ("check i", 1.1), ("comment_chars", -0.045)],
+          ("initial", 1.3), ("loop th", 1.5), ("check i", 1.1), ("comment_chars", -0.045),
+          ("block_comm_cells", -0.003)],
          -0.8, Z_NARRATOR_TAG, 1.2),
         (stmt_terms, 0.0, Z_IS_STMT, 1.0),
         (stmt_terms, -1.0, Z_IS_STMT, -1.0),
@@ -992,7 +1029,6 @@ def _build_block1(
         (dev_default_pats, Z_DEV_DEFAULT),
         (env_veto_pats, Z_ENV_VETO),
         ((" = ",), Z_HAS_ASSIGN),
-        (elision_pats, Z_ELISION_RAW),
         (("doc_or_block_comm", "c:///", "c://!", "code_chars"), Z_LINE_COMM_VETO),
         (("c:```", "c:>>>"), Z_COMM_FENCE),
         (comm_code_pats, Z_COMM_STRONG_CUE),
@@ -1007,6 +1043,12 @@ def _build_block1(
     two_env_terms = [(key, 1.0) for key in env_lookup_pats]
     line_rules.append((two_env_terms, -1.0, Z_TWO_ENVS, 1.0))
     line_rules.append((two_env_terms, -2.0, Z_TWO_ENVS, -1.0))
+
+    # Elision evidence in [0, 2]: cue count minus comment length, so prose that merely
+    # contains "existing" or "rest of" stays below the 0.75 firing level of the context rule
+    elision_terms = [(key, 1.0) for key in elision_pats] + [("comment_chars", -1.0 / 56.0)]
+    line_rules.append((elision_terms, 0.25, Z_ELISION_RAW, 1.0))
+    line_rules.append((elision_terms, -1.75, Z_ELISION_RAW, -1.0))
 
     free_narrow = [slot for slot in range(n_conv3) if not np.any(conv3_w[:, :, slot])]
     free_medium = [slot for slot in range(n_conv7) if not np.any(conv7_w[:, :, slot])]
@@ -1172,15 +1214,18 @@ def _build_block2_and_heads(
     """Compile {-1, 0, +1} sink-attention heads, [0, 1] issue clamps, and System One readout."""
     center = MAX_REL_DIST
     num_rel = 2 * center + 1
-    a1_wq = np.zeros((N_Z, 128), dtype=np.int8)
-    a1_wq_s = np.ones((128,), dtype=np.float32)
-    a1_wk = np.zeros((N_Z, 128), dtype=np.int8)
-    a1_wk_s = np.ones((128,), dtype=np.float32)
-    a1_wv = np.zeros((N_Z, 96), dtype=np.int8)
-    a1_wv_s = np.ones((96,), dtype=np.float32)
-    a1_wo = np.zeros((96, N_Z), dtype=np.int8)
-    a1_br = np.full((8, num_rel), -1e4, dtype=np.float32)
-    a1_bs = np.array([4.5, 1.2, 1.5, 2.5, 9.05, 11.1, -12.0, -12.0], dtype=np.float32)
+    a1_heads, a1_qk, a1_val = 10, 16, 12
+    a1_wq = np.zeros((N_Z, a1_heads * a1_qk), dtype=np.int8)
+    a1_wq_s = np.ones((a1_heads * a1_qk,), dtype=np.float32)
+    a1_wk = np.zeros((N_Z, a1_heads * a1_qk), dtype=np.int8)
+    a1_wk_s = np.ones((a1_heads * a1_qk,), dtype=np.float32)
+    a1_wv = np.zeros((N_Z, a1_heads * a1_val), dtype=np.int8)
+    a1_wv_s = np.ones((a1_heads * a1_val,), dtype=np.float32)
+    a1_wo = np.zeros((a1_heads * a1_val, N_Z), dtype=np.int8)
+    a1_br = np.full((a1_heads, num_rel), -1e4, dtype=np.float32)
+    a1_bs = np.array(
+        [4.5, 1.2, 1.5, 2.5, 9.05, 11.1, -12.0, -12.0, -12.0, 12.0], dtype=np.float32
+    )
 
     # Head 0: uniform-diagonal Paley Hadamard projection for comment-to-code overlap
     h0_trits = _paley_uniform_proj()
@@ -1201,20 +1246,17 @@ def _build_block2_and_heads(
     a1_wq_s[h1_qk] = a1_wk_s[h1_qk] = [float(np.sqrt(32.0)), float(np.sqrt(16.0))]
     a1_br[1, center : center + 4] = 0.0
 
-    # Head 2 (L-8..L), Head 3 (L-9..L+9), Head 6 (file-wide), and Head 7 (L-3..L+3)
+    # Head 2 (L-8..L), Head 3 (L-9..L+9), Head 6 (file-wide), and Head 7 (L-3..L+3);
+    # Heads 8 (comment-block adjacency) and 9 (preprocessor context) are compiled further down
     a1_br[2, center - 8 : center + 1] = 0.0
     a1_br[3, center - 9 : center + 10] = 0.0
     a1_br[6, :] = 0.0
     a1_br[7, center - 3 : center + 4] = 0.0
 
-    h2_srcs = [
-        Z_DEPTH10, Z_DEPTH12, Z_BRANCH_OPEN, Z_EARLY_EXIT,
-        Z_GUARD_CLAUSE, Z_CLEAN_IDIOM, Z_DEEP_PYRAMID,
-    ]
-    h2_slots = list(range(24, 31))
+    h2_srcs = [Z_BRANCH_OPEN, Z_EARLY_EXIT, Z_GUARD_CLAUSE, Z_CLEAN_IDIOM, Z_DEEP_PYRAMID]
+    h2_slots = list(range(26, 31))
     a1_wv[h2_srcs, h2_slots] = 1
-    a1_wv_s[slice(24, 31)] = [0.8, 1.5, 1.0, 1.0, 0.8, 0.8, 1.0]
-    a1_wo[[24, 25], Z_ENCLOSING_DEPTH] = 1
+    a1_wv_s[slice(26, 31)] = [1.0, 1.0, 0.8, 0.8, 1.0]
     a1_wo[26, Z_ENCLOSING_BRANCHES] = 1
     a1_wo[[27, 28, 29], Z_ENCLOSING_GUARDS] = 1
     a1_wo[30, Z_ENCLOSING_DEEP16] = 1
@@ -1223,13 +1265,13 @@ def _build_block2_and_heads(
     a1_wv[[Z_HARDCODED_CASE, Z_SWITCH_BLOCK], spec_slots] = 1
     a1_wv_s[spec_slots] = [1.53, 2.5 * 1.53]
     a1_wo[spec_slots, Z_LOCAL_SPECIAL_CASES] = [1, -1]
-    a1_wv[[Z_CHAINED_CALLS, Z_NESTED_TERNARY, Z_CEREMONY], [84, 84, 85]] = 1
-    a1_wo[[84, 85], [Z_LOCAL_CHAINING, Z_LOCAL_CEREMONY]] = 1
+    a1_wv[Z_CEREMONY, 85] = 1
+    a1_wo[85, Z_LOCAL_CEREMONY] = 1
 
     direct_copies = (
         ([Z_REAL_HANDLER, Z_EMPTY_HANDLER], [12, 13], [Z_NEAR_REAL_HANDLER, Z_NEAR_EMPTY_HANDLER]),
-        ([Z_IS_STMT, Z_PARAGRAPH_BREAK, Z_ODD_INDENT], [36, 37, 38],
-         [Z_LOCAL_STMT_DENSITY, Z_LOCAL_BREAK_DENSITY, Z_LOCAL_ODD_INDENT]),
+        ([Z_IS_STMT, Z_PARAGRAPH_BREAK], [36, 37],
+         [Z_LOCAL_STMT_DENSITY, Z_LOCAL_BREAK_DENSITY]),
         ([Z_ONE_CHAR_ID, Z_WORD_COUNT, Z_MOD4_EQ0, Z_MOD4_EQ2, Z_ODD_INDENT], list(range(72, 77)),
          [Z_FILE_ONE_CHAR, Z_FILE_WORDS, Z_FILE_MOD4_0, Z_FILE_MOD4_2, Z_FILE_ODD_IND]),
         ([Z_SHORT_GOLF, Z_MAGIC_NUM], [86, 87], [Z_LOCAL_SHORT_GOLF, Z_LOCAL_MAGIC_NUM]),
@@ -1275,6 +1317,24 @@ def _build_block2_and_heads(
     a1_wv_s[fence_slot] = 40.0
     a1_wo[fence_slot, Z_NEAR_COMM_FENCE] = 1
 
+    # Head 8 (L-1 and L+1): count adjacent prose line comments, so a line inside a multi-line
+    # comment block reads as explanation instead of a one-line restatement
+    block_slot = 8 * a1_val
+    a1_br[8, [center - 1, center + 1]] = 0.0
+    a1_wv[Z_PROSE_COMMENT, block_slot] = 1
+    a1_wv_s[block_slot] = 2.0
+    a1_wo[block_slot, Z_COMMENT_BLOCK] = 1
+
+    # Head 9 (file-wide): a line-lead `# ` line queries unspaced C preprocessor directives
+    # (#include, #define, #ifndef, #ifdef, #endif). One match outweighs the sink, marking the
+    # line as a `# define`-style directive; without a match the sink absorbs the query
+    preproc_qk, preproc_slot = 9 * a1_qk, 9 * a1_val
+    a1_br[9, :] = 0.0
+    a1_wq[Z_HASH_COMMENT, preproc_qk] = a1_wk[Z_DIRECTIVE, preproc_qk] = 1
+    a1_wq_s[preproc_qk] = a1_wk_s[preproc_qk] = float(np.sqrt(24.0 * np.sqrt(a1_qk)))
+    a1_wv[Z_DIRECTIVE, preproc_slot] = 1
+    a1_wo[preproc_slot, Z_PREPROC_LINE] = 1
+
     trit_mats["attn1_wq"], vecs_1d["attn1_wq_s"] = a1_wq, a1_wq_s
     trit_mats["attn1_wk"], vecs_1d["attn1_wk_s"] = a1_wk, a1_wk_s
     trit_mats["attn1_wv"], vecs_1d["attn1_wv_s"] = a1_wv, a1_wv_s
@@ -1307,12 +1367,13 @@ def _build_block2_and_heads(
         ([(zh["one_r5"], 1), (Z_FILE_ONE_CHAR, 1), (Z_FILE_WORDS, -1),
           (zh["words_r5"], -1), (Z_HAS_CODE, 1)],
          -1.45, [Z_RAW_CRYPTIC], 0.4, 2.2),
-        ([(Z_PURE_COMMENT, 1), (Z_SHORT_COMMENT, 1), (Z_RESTATES_CODE, 1)],
+        ([(Z_PURE_COMMENT, 1), (Z_SHORT_COMMENT, 1), (Z_RESTATES_CODE, 1),
+          (Z_COMMENT_BLOCK, -1), (Z_PREPROC_LINE, -1)],
          -3.35, [Z_ISS_COMMENT], 1.0, 2.5),
         ([(Z_NARRATOR_TAG, 1)], -0.45, [Z_ISS_COMMENT], 1.5, 2.2),
         ([(Z_TRY_CATCH, 1), (Z_NEAR_EMPTY_HANDLER, 1), (Z_NEAR_REAL_HANDLER, -1)],
          -2.1, [Z_ISS_ERROR], 1.8, 2.5),
-        ([(Z_FALLBACK_SWALLOW, 1)], -0.35, [Z_ISS_ERROR], 1.4, 2.2),
+        ([(Z_FALLBACK_SWALLOW, 1), (Z_FAIL_FAST, -1)], -0.35, [Z_ISS_ERROR], 1.4, 2.2),
 
         ([(zh["chain_12"], 1), (zh["tern_125"], 1), (zh["o96_11"], 1), (zh["o80_025"], 1),
           (zh["stdlib_09"], -1), (zh["modhdr_30"], -1)],
@@ -1347,13 +1408,14 @@ def _build_block2_and_heads(
          -0.5, [Z_CONT_ENV], 1.0, 4.0),
         ([(Z_DEV_DEFAULT, 1), (Z_HAS_ASSIGN, -1), (Z_FAIL_FAST, -1)],
          -0.5, [Z_CONT_DEV_DEF], 1.0, 4.0),
-        ([(Z_ELISION_RAW, 1), (Z_LINE_COMM_VETO, -1)],
-         -0.5, [Z_ISS_COMMENT], 1.0, 4.0),
-        ([(Z_PURE_COMMENT, 1), (Z_COMM_STRONG_CUE, 1),
-          (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1)],
+        ([(Z_ELISION_RAW, 1), (Z_PURE_COMMENT, 1), (Z_LINE_COMM_VETO, -1),
+          (Z_COMMENT_BLOCK, -1), (Z_PREPROC_LINE, -1)],
+         -1.5, [Z_ISS_COMMENT], 1.0, 4.0),
+        ([(Z_PURE_COMMENT, 1), (Z_COMM_STRONG_CUE, 1), (Z_LINE_COMM_VETO, -1),
+          (Z_NEAR_COMM_FENCE, -1), (Z_PREPROC_LINE, -1)],
          -1.5, [Z_COMM_CODE_LINE], 1.0, 4.0),
-        ([(Z_PURE_COMMENT, 1), (Z_COMM_ASSIGN, 1), (Z_COMM_FCALL, 1),
-          (Z_COMM_STRONG_CUE, -1), (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1)],
+        ([(Z_PURE_COMMENT, 1), (Z_COMM_ASSIGN, 1), (Z_COMM_FCALL, 1), (Z_COMM_STRONG_CUE, -1),
+          (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1), (Z_PREPROC_LINE, -1)],
          -2.5, [Z_COMM_CODE_LINE], 1.0, 4.0),
     ]
 
@@ -1554,18 +1616,17 @@ def _build_block2_and_heads(
     doc1_b = np.zeros((64,), dtype=np.float32)
     doc2_w = np.zeros((64, 31), dtype=np.int8)
 
+    # Every document head reads issue density (gated mean over active lines) only. Max-pooled
+    # issue registers saturate once any line in a long file fires, which made the score fall
+    # with file length (r = -0.69 against log line count over 2,758 files) at flat density
     step_issue = 0.26
+    density_gain = 14.0
     for head_i, reg in enumerate(issue_regs):
-        mean_slot = 6 * head_i
-        max_slot = mean_slot + 3
+        mean_slot = 3 * head_i
         for trit_i, pow3 in enumerate((1.0, 3.0, 9.0)):
             doc1_w[reg, mean_slot + trit_i] = 1
-            doc1_s[mean_slot + trit_i] = 4.5 * step_issue * pow3
+            doc1_s[mean_slot + trit_i] = density_gain * step_issue * pow3
             doc1_b[mean_slot + trit_i] = -0.03 * step_issue * pow3
-
-            doc1_w[N_Z + reg, max_slot + trit_i] = 1
-            doc1_s[max_slot + trit_i] = 0.65 * step_issue * pow3
-            doc1_b[max_slot + trit_i] = -0.17 * step_issue * pow3
 
         for col_j in range(31):
             w_val = float(target_doc2[head_i, col_j])
@@ -1573,9 +1634,8 @@ def _build_block2_and_heads(
                 continue
             trits = _balanced_trits(w_val, step_issue, num_trits=3)
             doc2_w[mean_slot : mean_slot + 3, col_j] = trits
-            doc2_w[max_slot : max_slot + 3, col_j] = trits
 
-    bonus_base = 48
+    bonus_base = 24
     step_bonus = 0.05
     for trit_i, pow3 in enumerate((1.0, 3.0, 9.0, 27.0)):
         slot = bonus_base + trit_i
@@ -1589,13 +1649,12 @@ def _build_block2_and_heads(
 
     style_exact = (
         ([Z_RAW_CRYPTIC], 3.5 * 3.3, style_base + 3),
-        ([N_Z + Z_RAW_CRYPTIC], 0.6 * 3.3, style_base + 3),
         ([Z_CEREMONY], 2.0 * 3.5, style_base + 2),
         ([Z_LONG_IDENT], 1.5 * 3.5, style_base + 2),
         ([Z_CLEAN_IDIOM], 2.0 * 1.3, style_base),
         ([Z_EARLY_EXIT, Z_GUARD_CLAUSE], 1.2 * 1.3, style_base),
     )
-    exact_base = 52
+    exact_base = 28
     for offset, (srcs, sc_val, dst_col) in enumerate(style_exact):
         slot = exact_base + offset
         doc1_w[srcs, slot] = 1

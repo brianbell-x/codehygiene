@@ -1,0 +1,68 @@
+{
+  "line_cases": [
+    {
+      "file": "raise_noqa.py",
+      "weakness": "A line that raises was labelled swallowed_error because of its `# noqa` suffix.",
+      "v040": [[4, "swallowed_error"]],
+      "expect": []
+    },
+    {
+      "file": "why_comment_units.ts",
+      "weakness": "A units comment (`0.5kg per item unit`) was flagged as restating the next line.",
+      "v040": [[4, "noisy_comment"]],
+      "expect": []
+    },
+    {
+      "file": "why_comment_prose.js",
+      "weakness": "A why-comment containing the word `existing` fired the elision-placeholder cue.",
+      "v040": [[6, "noisy_comment"]],
+      "expect": []
+    },
+    {
+      "file": "why_comment_block.zig",
+      "weakness": "The last line of a multi-line explanation was flagged as restating the next line.",
+      "v040": [[4, "noisy_comment"]],
+      "expect": []
+    },
+    {
+      "file": "doc_comment_initial.c",
+      "weakness": "A block-comment line containing `initialized` fired the narrator cue at any length.",
+      "v040": [[4, "noisy_comment"]],
+      "expect": []
+    },
+    {
+      "file": "preproc_define.c",
+      "weakness": "C `# define` lines inside `#ifndef` blocks were read as comments restating code.",
+      "v040": [[6, "noisy_comment"], [9, "noisy_comment"]],
+      "expect": []
+    },
+    {
+      "file": "readme_example.py",
+      "weakness": "Control: the README example keeps its four squiggles.",
+      "v040": [[2, "noisy_comment"], [8, "deep_nesting"], [9, "deep_nesting"], [12, "swallowed_error"]],
+      "expect": [[2, "noisy_comment"], [8, "deep_nesting"], [9, "deep_nesting"], [12, "swallowed_error"]]
+    },
+    {
+      "file": "noise_controls.py",
+      "weakness": "Control: restating one-liners, TODO, elision placeholder and a swallowed error still fire.",
+      "v040": [[2, "noisy_comment"], [4, "noisy_comment"], [6, "noisy_comment"], [8, "noisy_comment"], [15, "swallowed_error"]],
+      "expect": [[2, "noisy_comment"], [4, "noisy_comment"], [6, "noisy_comment"], [8, "noisy_comment"], [15, "swallowed_error"]]
+    },
+    {
+      "file": "noise_controls.c",
+      "weakness": "Control: a short block-comment narrator, step narration and an elision line still fire.",
+      "v040": [[2, "noisy_comment"], [8, "noisy_comment"], [10, "noisy_comment"]],
+      "expect": [[2, "noisy_comment"], [8, "noisy_comment"], [10, "noisy_comment"]]
+    }
+  ],
+  "density_cases": [
+    {
+      "issues": "length_bias_issues.py",
+      "filler": "length_bias_filler.py",
+      "weakness": "Six squiggles of four kinds pinned the score near 0.16 however much clean code followed.",
+      "repeats": [1, 5, 30],
+      "v040": [0.055, 0.1372, 0.1555],
+      "min_score": 0.8
+    }
+  ]
+}
