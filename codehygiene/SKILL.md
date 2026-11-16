@@ -65,3 +65,4 @@ Once the user confirms opening an issue:
 
 - Execute the CLI directly rather than guessing scores from visual inspection.
 - Do not game scores by shortening clear identifiers to 2 letters, cramming multiple statements onto one line, stripping legitimate error handling, or raising `-t` / `--threshold` above `0.55`; skip false positives openly instead.
+- When `stderr` prints a `codehygiene` update notice, mention the available update briefly at the end of the turn (or offer `npx skills update codehygiene -y` / `npx skills update codehygiene -g -y`).

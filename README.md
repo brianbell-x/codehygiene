@@ -39,8 +39,10 @@ example.py
 Install as a cross-platform agent skill (Claude Code, Codex, Cursor, Antigravity, Copilot on macOS, Linux, and Windows) with bundled offline weights via `npx skills`:
 
 ```bash
-npx skills add brianbell-x/codehygiene     # current project
-npx skills add brianbell-x/codehygiene -g  # global across all projects
+npx skills add brianbell-x/codehygiene        # current project
+npx skills add brianbell-x/codehygiene -g     # global across all projects
+npx skills update codehygiene -y              # pull latest circuits & SKILL.md (add -g for global)
+npx skills check                              # verify installed skill matches main (CI-friendly)
 ```
 
 Or run the CLI directly via `uvx` / `pip`:
@@ -70,7 +72,9 @@ codehygiene src/ --check                   # exit 1 if any squiggle >= threshold
 codehygiene path/to/file.py --json         # structured JSON for coding agents & tooling
 codehygiene "src/*.go" -t 0.60 --no-color  # custom squiggle probability threshold
 cat snippet.rs | codehygiene --json        # evaluate raw source from stdin
-```
+`
+
+Public release metadata on main is checked at most once every 12 hours (cached in the OS user cache directory outside <SKILL_DIR>) to print a one-line stderr notice when newer circuits or skill instructions are available; skipped automatically in CI or when --no-update-check / CODEHYGIENE_NO_UPDATE_CHECK=1 is set.``
 
 ## Python & RL Reward API
 

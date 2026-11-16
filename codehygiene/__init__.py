@@ -418,6 +418,17 @@ def _expand_paths(specs: list[str]) -> list[Path]:
     return expanded
 
 
+def _load_update_module() -> Any:
+    if __package__:
+        from . import update_check
+        return update_check
+    pkg_dir = str(Path(__file__).resolve().parent)
+    if pkg_dir not in sys.path:
+        sys.path.insert(0, pkg_dir)
+    import update_check
+    return update_check
+
+
 def main(argv: list[str] | None = None) -> int:
     desc = "A 13 KB, 1.58-bit ternary weight-space programmed System One model for code hygiene."
     parser = argparse.ArgumentParser(prog="codehygiene", description=desc)
@@ -426,6 +437,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="Exit 1 when squiggles are found")
     parser.add_argument("--json", action="store_true", help="Output structured JSON")
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
+    parser.add_argument(
+        "--no-update-check", action="store_true", help="Skip 12-hour release check"
+    )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
@@ -439,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
     if not targets:
         return 0
 
+    updater = _load_update_module()
+    update_handle = updater.start_update_check(__version__, disabled=args.no_update_check)
     runs = [(label, src, score(src, threshold=args.threshold)) for label, src in targets]
     exit_code = 1 if (args.check and any(res.squiggles for _, _, res in runs)) else 0
     if args.json:
@@ -446,13 +462,14 @@ def main(argv: list[str] | None = None) -> int:
         is_single = len(payloads) == 1 and (not args.files or not Path(args.files[0]).is_dir())
         body = payloads[0] if is_single else dict(zip((lbl for lbl, _, _ in runs), payloads))
         print(json.dumps(body, indent=2))
-        return exit_code
+    else:
+        reports = [
+            render_report(lbl, src, args.threshold, not args.no_color, res)
+            for lbl, src, res in runs
+        ]
+        print("\n\n".join(reports))
 
-    reports = [
-        render_report(lbl, src, args.threshold, not args.no_color, res)
-        for lbl, src, res in runs
-    ]
-    print("\n\n".join(reports))
+    updater.emit_update_notice(update_handle)
     return exit_code
 
 
