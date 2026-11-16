@@ -33,7 +33,6 @@
   - `codehygiene/weights.npz` — Compiled `14.47 KiB` (`1.58-bit` ternary) checkpoint loaded at runtime.
   - `docs/` — Zero-backend client-side browser playground unpacking `weights.npz` directly in JavaScript (`docs/engine.js`).
   - `benchmarks/` — Reproducible controlled (`suites.json`), adversarial/anti-gaming, JS-parity, and held-out CPython stdlib benchmark suite (`run_benchmarks.py`).
-  - `gpt-oss-example/` — Four-language `GPT-OSS 120B` `before/` vs. `after/` agent benchmark suites (`billing_python`, `gateway_js`, `checkout_ts`, `matching_rust`) with independent structural metrics in `evaluate.py`.
 - **Architecture pipeline (`_forward`):**
   1. **Block 0 (Column Prefix & Masking):** `tok_emb (128, 47)` + `col_emb (128, 47)` -> `pre_conv3` -> causal prefix `W_causal1` -> `gate1` (16-quote sawtooth string parity + comment openers, including `##` banners) -> `W_causal2` -> `col_fuse` (`54` channels).
   2. **Block 1 (Line Convolutions, Multiline State & Sketches):** Multi-scale column `Conv1D` (`k=3, 7, 13`) + cross-line `"""`/`'''`/`/* */` docstring/comment sawtooth (`ml_proj`, `ml_gate_w`) + 16-line Dyck parenthesis balance (`ml_paren_w`) + 4-gram SimHash `sketch` (`40` code + `40` comment dims, L2-normalized) + `lmlp1/2` -> `Z` (`L, 238`).
@@ -43,11 +42,10 @@
   - Never hand-edit `codehygiene/weights.npz`; express all behavior changes in `compile.py` and run `python3 compile.py`.
   - Keep `_forward` strictly neural (matrix multiplies, 1D convolutions, causal prefix sums, elementwise activations, attention). Do not introduce regexes, tokenizers, or AST parsers into inference.
   - Keep runtime dependencies limited to `numpy` with zero OS-specific or native extensions, and keep `docs/engine.js` numerically synchronized with `codehygiene/__init__.py`.
-  - Verify self-hygiene, `benchmarks`, and `gpt-oss-example` gates before committing (`gpt-oss-example/*/before/` intentionally retains unrefactored Phase 1 baselines):
+  - Verify self-hygiene and `benchmarks` gates before committing:
     ```bash
     python3 compile.py
-    python3 -m codehygiene codehygiene compile.py docs benchmarks gpt-oss-example/evaluate.py gpt-oss-example/billing_python/after gpt-oss-example/gateway_js/after gpt-oss-example/checkout_ts/after gpt-oss-example/matching_rust/after --check --no-color --no-update-check
+    python3 -m codehygiene codehygiene compile.py docs benchmarks --check --no-color --no-update-check
     python3 benchmarks/run_benchmarks.py --check
-    python3 gpt-oss-example/evaluate.py --check
     ```
   - After making circuit, runtime, or benchmark changes, render an interactive HTML report comparing previous vs. updated model performance (held-out CPython stdlib distribution, adversarial RL-gaming probes, controlled recall & clean traps, CPU latency scaling, and concrete Before/After code diffs).

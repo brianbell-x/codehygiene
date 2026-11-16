@@ -167,8 +167,8 @@ def run_js_parity_check() -> tuple[dict[str, Any], list[str]]:
         "const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);",
         "const w = await unpackNpzBuffer(ab);",
         "const paths = [",
-        "  'gpt-oss-example/billing_python/before/billing.py',",
-        "  'gpt-oss-example/matching_rust/after/matching.rs',",
+        "  'compile.py',",
+        "  'docs/app.js',",
         "  'codehygiene/__init__.py'",
         "];",
         "const out = {};",
@@ -256,13 +256,12 @@ def run_heldout_stdlib_suite(module_names: list[str]) -> dict[str, Any]:
 
 def measure_latencies() -> dict[str, float]:
     hygiene, _ = load_modules()
-    billing_path = REPO_ROOT / "gpt-oss-example" / "billing_python" / "before" / "billing.py"
-    billing = billing_path.read_text("utf-8")
-    lines = billing.splitlines()
+    init_path = REPO_ROOT / "codehygiene" / "__init__.py"
+    lines = init_path.read_text("utf-8").splitlines()
     samples = {
         "warm_12_lines_ms": "\n".join(lines[:12]),
         "warm_65_lines_ms": "\n".join(lines[:65]),
-        "warm_333_lines_ms": billing,
+        "warm_333_lines_ms": "\n".join(lines[:333]),
     }
     argparse_path = Path(os.__file__).resolve().parent / "argparse.py"
     if argparse_path.is_file():

@@ -56,22 +56,11 @@ Controlled circuit suites ([`benchmarks/suites.json`](benchmarks/suites.json)), 
 | **Held-out CPython 3.13 stdlib median score** (all / `<650` LOC) | `0.093` / `0.24` | **`0.386` / `0.588`** |
 | **Warm CPU latency** (`12` / `65` / `333` / `2,649` lines) | `10.2` / `63.6` / `~380` / `3,902 ms` | **`~7` / `~35` / `~200` / `~1,500 ms`** |
 
-Four dependency-free `GPT-OSS 120B (Medium)` subsystems refactored under `codehygiene --check` are evaluated alongside weight-independent structural metrics (methodology in [`gpt-oss-example/README.md`](gpt-oss-example/README.md)):
-
-| App | Lang | Score (`B -> A`) | Squiggles | `rl_reward` | Max Indent | `>100` Cols | LOC (`B -> A`) | Tests |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `billing_python` | Python | `0.779 -> 0.862` | `6 -> 0` | `1.0198 -> 1.2184` | `28 -> 16` | `4 -> 1` | `333 -> 275` | `8/8 · 8/8` |
-| `gateway_js` | JS | `0.840 -> 0.886` | `5 -> 0` | `1.0249 -> 1.2230` | `6 -> 6` | `6 -> 4` | `205 -> 194` | `8/8 · 8/8` |
-| `checkout_ts` | TS | `0.698 -> 0.892` | `9 -> 0` | `1.0119 -> 1.2240` | `6 -> 8` | `3 -> 1` | `229 -> 236` | `8/8 · 8/8` |
-| `matching_rust` | Rust | `0.024 -> 0.855` | `27 -> 0` | `1.0003 -> 1.2171` | `24 -> 16` | `16 -> 1` | `312 -> 488` | `8/8 · 8/8` |
-| **Mean / Total** | **4 langs** | **`0.585 -> 0.874`** | **`47 -> 0`** | **`1.0142 -> 1.2206`** | — | **`29 -> 7`** | **`1,079 -> 1,193`** | **`64 / 64`** |
-
 ## Development
 
 ```bash
 python3 compile.py                              # deterministic weight compilation -> weights.npz
 python3 benchmarks/run_benchmarks.py --check    # controlled, adversarial, JS-parity & stdlib suite
-python3 gpt-oss-example/evaluate.py --check     # 4-language before/after structural evaluation
 python3 -m http.server 8123 -d docs             # local Web Worker playground
 ```
 
