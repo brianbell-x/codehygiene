@@ -1,7 +1,11 @@
 const MAX_COLS = 128;
 const MAX_REL_DIST = 32;
 const SKETCH_DIM = 40;
-const NUM_CHANNELS_HC = 52;
+const PRIOR_LINES = 8.0;
+const PEAK_WINDOW = 32;
+const PEAK_MIN_GATE = 10.0;
+const PEAK_PRIOR = 4.0;
+const Z_IN_DOC = 148;
 
 const HC_ACT = 0;
 const HC_COMM = 1;
@@ -291,9 +295,10 @@ function splitPythonLines(text) {
   return trimmed.split(/\r\n|\r|\n/);
 }
 
-export function encodeByteGrid(code, maxLines = 2048) {
+export function encodeByteGrid(code, maxLines = null) {
   const expanded = expandTabsTwo(code);
-  const lines = splitPythonLines(expanded).slice(0, maxLines);
+  const allLines = splitPythonLines(expanded);
+  const lines = maxLines === null ? allLines : allLines.slice(0, maxLines);
   const numLines = lines.length;
   const grid = new Uint8Array(numLines * MAX_COLS);
 
@@ -664,6 +669,42 @@ function attendHeadQuery(qLine, numLines, headCfg, qProj, kProj, vProj, merged, 
   }
 }
 
+function headHasQuery(wq, colStart, colEnd) {
+  const { colIndices } = wq;
+  for (let idx = 0; idx < colIndices.length; idx += 1) {
+    if (colIndices[idx] >= colStart && colIndices[idx] < colEnd) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isUniformZeroRel(bRel, relBase, relSpan) {
+  for (let idx = 0; idx < relSpan; idx += 1) {
+    if (bRel[relBase + idx] !== 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function attendUniformGlobal(numLines, valTotal, valHeadOff, valDim, sinkLogit, vProj, merged) {
+  const weight = 1.0 / (numLines + Math.exp(sinkLogit));
+  const sumVec = new Float32Array(valDim);
+  for (let row = 0; row < numLines; row += 1) {
+    const vBase = row * valTotal + valHeadOff;
+    for (let dim = 0; dim < valDim; dim += 1) {
+      sumVec[dim] += vProj[vBase + dim];
+    }
+  }
+  for (let row = 0; row < numLines; row += 1) {
+    const dstBase = row * valTotal + valHeadOff;
+    for (let dim = 0; dim < valDim; dim += 1) {
+      merged[dstBase + dim] += sumVec[dim] * weight;
+    }
+  }
+}
+
 function sinkAttention(state, numLines, wq, wk, wv, wo, bRel, bSink) {
   const numHeads = bSink.length;
   const qkTotal = wq.cols;
@@ -672,25 +713,33 @@ function sinkAttention(state, numLines, wq, wk, wv, wo, bRel, bSink) {
   const valDim = valTotal / numHeads;
   const invScale = 1.0 / Math.sqrt(headDim);
   const relSpan = 2 * MAX_REL_DIST + 1;
-  const hasQuery = wq.nonZeroCount > 0 && wk.nonZeroCount > 0;
+  const layerHasQuery = wq.nonZeroCount > 0 && wk.nonZeroCount > 0;
 
-  const qProj = hasQuery ? linearSparse(state, numLines, wq, null, false) : null;
-  const kProj = hasQuery ? linearSparse(state, numLines, wk, null, false) : null;
+  const qProj = layerHasQuery ? linearSparse(state, numLines, wq, null, false) : null;
+  const kProj = layerHasQuery ? linearSparse(state, numLines, wk, null, false) : null;
   const vProj = linearSparse(state, numLines, wv, null, false);
   const merged = new Float32Array(numLines * valTotal);
   const logits = new Float32Array(numLines);
   const validKeys = new Int32Array(numLines);
 
   for (let head = 0; head < numHeads; head += 1) {
+    const qkHeadOff = head * headDim;
+    const valHeadOff = head * valDim;
+    const relBase = head * relSpan;
+    const hasQuery = layerHasQuery && headHasQuery(wq, qkHeadOff, qkHeadOff + headDim);
+    if (!hasQuery && isUniformZeroRel(bRel, relBase, relSpan)) {
+      attendUniformGlobal(numLines, valTotal, valHeadOff, valDim, bSink[head], vProj, merged);
+      continue;
+    }
     const headCfg = {
       qkTotal,
       valTotal,
       headDim,
       valDim,
       invScale,
-      qkHeadOff: head * headDim,
-      valHeadOff: head * valDim,
-      relBase: head * relSpan,
+      qkHeadOff,
+      valHeadOff,
+      relBase,
       bRel,
       sinkLogit: bSink[head],
       hasQuery,
@@ -744,17 +793,76 @@ function classifyCellMask(cells, cellOff) {
   return 5;
 }
 
-function extractCellMasks(cells, lines, numLines, width) {
+function extractCellMasks(cells, lines, numLines, width, hcDim) {
   const masks = new Uint8Array(numLines * width);
   for (let row = 0; row < numLines; row += 1) {
     const lineLen = Math.min(width, Array.from(lines[row]).length);
     const rowMaskBase = row * width;
-    const rowCellBase = row * width * NUM_CHANNELS_HC;
+    const rowCellBase = row * width * hcDim;
     for (let col = 0; col < lineLen; col += 1) {
-      masks[rowMaskBase + col] = classifyCellMask(cells, rowCellBase + col * NUM_CHANNELS_HC);
+      masks[rowMaskBase + col] = classifyCellMask(cells, rowCellBase + col * hcDim);
     }
   }
   return masks;
+}
+
+function exclusiveLinePrefix(deltas, numLines, dim) {
+  const out = new Float32Array(numLines * dim);
+  const running = new Float32Array(dim);
+  for (let row = 0; row < numLines; row += 1) {
+    const base = row * dim;
+    for (let chan = 0; chan < dim; chan += 1) {
+      out[base + chan] = running[chan];
+      running[chan] += deltas[base + chan];
+    }
+  }
+  return out;
+}
+
+function applyDocstringCellMasks(state, numLines, stateDim, width, lines, cellMasks) {
+  for (let row = 0; row < numLines; row += 1) {
+    if (state[row * stateDim + Z_IN_DOC] <= 0.5) {
+      continue;
+    }
+    const maskStart = row * width;
+    const lineLen = Math.min(width, Array.from(lines[row]).length);
+    for (let col = 0; col < lineLen; col += 1) {
+      if (cellMasks[maskStart + col] === 2) {
+        cellMasks[maskStart + col] = 3;
+      }
+    }
+  }
+}
+
+function computePeakWindowVectors(state, activeGate, numLines, stateDim, docVec) {
+  const prefixW = new Float32Array((numLines + 1) * stateDim);
+  const prefixG = new Float32Array(numLines + 1);
+  for (let row = 0; row < numLines; row += 1) {
+    const gateVal = activeGate[row];
+    prefixG[row + 1] = prefixG[row] + gateVal;
+    const srcBase = row * stateDim;
+    const prevBase = row * stateDim;
+    const dstBase = (row + 1) * stateDim;
+    for (let chan = 0; chan < stateDim; chan += 1) {
+      const val = state[srcBase + chan];
+      const posWeighted = val > 0 ? val * gateVal : 0.0;
+      prefixW[dstBase + chan] = prefixW[prevBase + chan] + posWeighted;
+    }
+  }
+
+  for (let hiIdx = 1; hiIdx <= numLines; hiIdx += 1) {
+    const loIdx = Math.max(0, hiIdx - PEAK_WINDOW);
+    const winGate = Math.max(prefixG[hiIdx] - prefixG[loIdx], PEAK_MIN_GATE) + PEAK_PRIOR;
+    const invDenom = 1.0 / winGate;
+    const hiBase = hiIdx * stateDim;
+    const loBase = loIdx * stateDim;
+    for (let chan = 0; chan < stateDim; chan += 1) {
+      const density = (prefixW[hiBase + chan] - prefixW[loBase + chan]) * invDenom;
+      if (density > docVec[stateDim + chan]) {
+        docVec[stateDim + chan] = density;
+      }
+    }
+  }
 }
 
 export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
@@ -809,8 +917,9 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
     params.col_fuse_b.data,
     true,
   );
-  const cellMasks = extractCellMasks(cells, lines, numLines, width);
-  const sparseCells = compactCells(cells, totalCells, NUM_CHANNELS_HC);
+  const hcDim = params.col_fuse_w.cols;
+  const cellMasks = extractCellMasks(cells, lines, numLines, width, hcDim);
+  const sparseCells = compactCells(cells, totalCells, hcDim);
 
   const colLimits = new Int32Array(numLines);
   for (let row = 0; row < numLines; row += 1) {
@@ -828,21 +937,37 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
     sparseCells, numLines, width, params.conv13_w, params.conv13_b.data, colLimits,
   );
 
-  const cellSums = sumLineCells(sparseCells, numLines, width, NUM_CHANNELS_HC);
+  const cellSums = sumLineCells(sparseCells, numLines, width, hcDim);
   const colSums = linearSparse(cellSums, numLines, params.col_sum_proj, null, false);
   const rawSketch = conv1dSumColumns(
     sparseCells, numLines, width, params.sketch_w, params.sketch_b.data, colLimits,
   );
 
-  const lineFeatDims = [
+  const rawArrays = [colSums, conv3Sum, conv7Sum, conv13Sum];
+  const rawDims = [
     params.col_sum_proj.cols,
     params.conv3_w.outChannels,
     params.conv7_w.outChannels,
     params.conv13_w.outChannels,
   ];
+  let featArrays = rawArrays;
+  let featDims = rawDims;
+  if (params.ml_proj) {
+    const mlDeltas = linearSparseParts(rawArrays, rawDims, numLines, params.ml_proj, null, false);
+    const mlExcl = exclusiveLinePrefix(mlDeltas, numLines, params.ml_proj.cols);
+    const mlSaw = linearSparse(
+      mlExcl, numLines, params.ml_gate_w, params.ml_gate_b.data, true,
+    );
+    const parenSuf = conv1dGrid(
+      mlDeltas, 1, numLines, params.ml_paren_w, params.ml_paren_b.data, true,
+    );
+    featArrays = [...rawArrays, mlSaw, parenSuf];
+    featDims = [...rawDims, params.ml_gate_w.cols, params.ml_paren_w.outChannels];
+  }
+
   const lineHidden = linearSparseParts(
-    [colSums, conv3Sum, conv7Sum, conv13Sum],
-    lineFeatDims,
+    featArrays,
+    featDims,
     numLines,
     params.lmlp1_w,
     params.lmlp1_b.data,
@@ -894,7 +1019,7 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
 
   const gateLogits = linearSparse(state, numLines, params.pool_gate_w, params.pool_gate_b.data, false);
   const activeGate = new Float32Array(numLines);
-  let gateSum = 1e-5;
+  let gateSum = params.ml_proj ? PRIOR_LINES : 1e-5;
   for (let row = 0; row < numLines; row += 1) {
     const gateVal = sigmoidScalar(gateLogits[row]);
     activeGate[row] = gateVal;
@@ -902,6 +1027,10 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
   }
 
   const stateDim = params.sq_w.rows;
+  if (params.ml_proj) {
+    applyDocstringCellMasks(state, numLines, stateDim, width, lines, cellMasks);
+  }
+
   const docVec = new Float32Array(stateDim * 2);
   for (let row = 0; row < numLines; row += 1) {
     const gateVal = activeGate[row];
@@ -909,14 +1038,19 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
     for (let chan = 0; chan < stateDim; chan += 1) {
       const val = state[rowBase + chan];
       docVec[chan] += val * gateVal;
-      const posWeighted = val > 0 ? val * gateVal : 0.0;
-      if (posWeighted > docVec[stateDim + chan]) {
-        docVec[stateDim + chan] = posWeighted;
+      if (!params.ml_proj) {
+        const posWeighted = val > 0 ? val * gateVal : 0.0;
+        if (posWeighted > docVec[stateDim + chan]) {
+          docVec[stateDim + chan] = posWeighted;
+        }
       }
     }
   }
   for (let chan = 0; chan < stateDim; chan += 1) {
     docVec[chan] /= gateSum;
+  }
+  if (params.ml_proj) {
+    computePeakWindowVectors(state, activeGate, numLines, stateDim, docVec);
   }
 
   const docHidden = linearSparse(docVec, 1, params.doc1_w, params.doc1_b.data, true);
@@ -1008,7 +1142,9 @@ export function computeRlReward(result, testsPassed = true, weight = 0.25, hygie
     return 0.0;
   }
   const blended = (1.0 - hygieneBlend) * result.score + hygieneBlend * result.rlHygiene;
-  return gate * (1.0 + weight * blended);
+  const sqCount = result.squiggles ? result.squiggles.length : 0;
+  const damp = 1.0 / (1.0 + 1.5 * sqCount);
+  return gate * (1.0 + weight * blended * damp);
 }
 
 export function formatJsonResult(result) {

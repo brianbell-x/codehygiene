@@ -1,4 +1,4 @@
-"""Evaluate before/after codehygiene metrics and test suites across the agent corpus."""
+"""Evaluate before/after codehygiene metrics and test suites across gpt-oss-example."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from typing import Any
 
 sys.dont_write_bytecode = True
 
-CORPUS_DIR = Path(__file__).resolve().parent
-REPO_ROOT = CORPUS_DIR.parent
+EXAMPLE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = EXAMPLE_DIR.parent
 
 
 @lru_cache(maxsize=1)
@@ -68,11 +68,36 @@ MATCHING_SPEC = AppSpec(
 APPS: tuple[AppSpec, ...] = (BILLING_SPEC, GATEWAY_SPEC, CHECKOUT_SPEC, MATCHING_SPEC)
 
 
+def measure_independent_stats(source: str) -> dict[str, int]:
+    """Compute non-neural structural metrics independent of codehygiene weights."""
+    max_indent = 0
+    over_100 = 0
+    comments = 0
+    for raw_line in source.expandtabs(2).splitlines():
+        stripped = raw_line.lstrip(" ")
+        if not stripped:
+            continue
+        if len(raw_line) > 100:
+            over_100 += 1
+        if stripped.startswith(("#", "//", "/*", "*")):
+            comments += 1
+            continue
+        indent = len(raw_line) - len(stripped)
+        if indent > max_indent:
+            max_indent = indent
+    return {
+        "max_indent_cols": max_indent,
+        "lines_over_100_cols": over_100,
+        "comment_lines": comments,
+    }
+
+
 def evaluate_file(path: Path) -> dict[str, Any]:
     hygiene = load_hygiene_module()
     source = path.read_text(encoding="utf-8")
     result = hygiene.score(source)
     reward = hygiene.rl_reward(source, tests_passed=True)
+    indep = measure_independent_stats(source)
 
     kind_counts = Counter(sq.kind for sq in result.squiggles)
     style_pct = round(result.archetype_probs[result.archetype] * 100)
@@ -80,6 +105,7 @@ def evaluate_file(path: Path) -> dict[str, Any]:
     return {
         "path": path.relative_to(REPO_ROOT).as_posix(),
         "loc": len(source.splitlines()),
+        **indep,
         "score": round(result.score, 4),
         "rl_hygiene": round(result.rl_hygiene, 4),
         "rl_reward": round(reward, 4),
@@ -149,7 +175,7 @@ def run_rust_suite(test_path: Path, variant: str) -> tuple[bool, int, str]:
 
 
 def execute_variant_tests(spec: AppSpec, variant: str) -> dict[str, Any]:
-    test_path = CORPUS_DIR / spec.test_rel
+    test_path = EXAMPLE_DIR / spec.test_rel
     if spec.runner == "python_unittest":
         ok, count, detail = run_python_suite(test_path, variant)
     elif spec.runner == "node_gateway":
@@ -171,8 +197,8 @@ def execute_variant_tests(spec: AppSpec, variant: str) -> dict[str, Any]:
 
 
 def evaluate_app(spec: AppSpec, include_tests: bool) -> dict[str, Any]:
-    before = evaluate_file(CORPUS_DIR / spec.before_rel)
-    after = evaluate_file(CORPUS_DIR / spec.after_rel)
+    before = evaluate_file(EXAMPLE_DIR / spec.before_rel)
+    after = evaluate_file(EXAMPLE_DIR / spec.after_rel)
 
     entry: dict[str, Any] = {
         "app": spec.name,
@@ -196,7 +222,7 @@ def evaluate_app(spec: AppSpec, include_tests: bool) -> dict[str, Any]:
     return entry
 
 
-def summarize_corpus(apps: list[dict[str, Any]], include_tests: bool) -> dict[str, Any]:
+def summarize_apps(apps: list[dict[str, Any]], include_tests: bool) -> dict[str, Any]:
     count = len(apps)
     before_score = sum(item["before"]["score"] for item in apps) / count
     after_score = sum(item["after"]["score"] for item in apps) / count
@@ -337,12 +363,27 @@ def format_markdown_report(
             f"**{summary['total_tests_passed']}/{summary['total_tests_expected']}**"
         )
     lines.append("| " + " | ".join(mean_cells) + " |")
+
+    lines.extend([
+        "",
+        "| App | Max Indent (`B->A`) | Lines >100 Cols (`B->A`) | Comment Lines (`B->A`) | LOC (`B->A`) |",
+        "| :--- | :---: | :---: | :---: | :---: |",
+    ])
+    for item in apps:
+        bef = item["before"]
+        aft = item["after"]
+        lines.append(
+            f"| `{item['app']}` | {bef['max_indent_cols']}->{aft['max_indent_cols']} "
+            f"| {bef['lines_over_100_cols']}->{aft['lines_over_100_cols']} "
+            f"| {bef['comment_lines']}->{aft['comment_lines']} "
+            f"| {bef['loc']}->{aft['loc']} |"
+        )
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Evaluate codehygiene corpus before/after scores, RL rewards, and tests."
+        description="Evaluate gpt-oss-example before/after scores, RL rewards, and tests."
     )
     parser.add_argument("--json", action="store_true", help="Emit structured JSON output")
     parser.add_argument(
@@ -358,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     apps = [evaluate_app(spec, args.run_tests) for spec in APPS]
-    summary = summarize_corpus(apps, args.run_tests)
+    summary = summarize_apps(apps, args.run_tests)
     failures = check_gate(apps, args.run_tests)
 
     if args.json:

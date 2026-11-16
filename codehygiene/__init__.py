@@ -13,7 +13,7 @@ import sys
 from typing import Any
 import numpy as np
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "ARCHETYPE_NAMES", "MAX_COLS", "MAX_REL_DIST", "Result", "SCORE_NAMES",
     "SQUIGGLE_KINDS", "SQUIGGLE_MESSAGES", "Squiggle", "encode_byte_grid",
@@ -24,12 +24,17 @@ __all__ = [
 MAX_COLS = 128
 MAX_REL_DIST = 32
 _SKETCH_DIM = 40
+_PRIOR_LINES = 8.0
+_PEAK_WINDOW = 32
+_PEAK_MIN_GATE = 10.0
+_PEAK_PRIOR = 4.0
+_RIBBON_GUARD = 6
 _POW3 = 3 ** np.arange(5, dtype=np.uint8)
 
 _CODE_EXTS = frozenset({
     ".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".c", ".h",
-    ".cc", ".cpp", ".hpp", ".rs", ".go", ".zig", ".java", ".cs", ".lua", ".rb",
-    ".php", ".swift", ".kt", ".scala", ".sh",
+    ".cc", ".cpp", ".cxx", ".hpp", ".rs", ".go", ".zig", ".java", ".cs", ".lua",
+    ".rb", ".php", ".swift", ".kt", ".scala", ".sh",
 })
 _SKIP_DIRS = frozenset({
     ".git", ".hg", ".svn", "__pycache__", "node_modules", "target",
@@ -118,16 +123,18 @@ def _conv1d(cells: np.ndarray, kernel: np.ndarray, bias: np.ndarray) -> np.ndarr
     num_lines, num_cols, _ = cells.shape
     k_size, _, out_channels = kernel.shape
     active_in = np.flatnonzero(np.any(kernel != 0, axis=(0, 2)))
+    if len(active_in) == 0:
+        return np.broadcast_to(bias, (num_lines, num_cols, out_channels)).copy()
+
     sub_cells = cells[:, :, active_in]
     sub_kern = np.ascontiguousarray(kernel[:, active_in, :])
-
     pad = (k_size - 1) // 2
     pad_widths = ((0, 0), (pad, k_size - 1 - pad), (0, 0))
     padded = np.pad(sub_cells, pad_widths) if k_size > 1 else sub_cells
+
     stride_cols = num_cols + k_size - 1
     flat_in = padded.reshape(-1, len(active_in))
     span = num_lines * stride_cols - (k_size - 1)
-
     flat_out = np.empty((num_lines * stride_cols, out_channels), dtype=np.float32)
     flat_out[:span] = bias
     for offset in range(k_size):
@@ -135,6 +142,164 @@ def _conv1d(cells: np.ndarray, kernel: np.ndarray, bias: np.ndarray) -> np.ndarr
         if k_slice.any():
             flat_out[:span] += flat_in[offset : offset + span] @ k_slice
     return flat_out.reshape(num_lines, stride_cols, out_channels)[:, :num_cols, :]
+
+
+def _ribbon_conv_sum(
+    rib_cells: np.ndarray,
+    rib_pos: np.ndarray,
+    line_starts: np.ndarray,
+    kernel: np.ndarray,
+    bias: np.ndarray,
+) -> np.ndarray:
+    k_size, _, out_channels = kernel.shape
+    pad = (k_size - 1) // 2
+    active_in = np.flatnonzero(np.any(kernel != 0, axis=(0, 2)))
+    sub_cells = np.ascontiguousarray(rib_cells[:, active_in])
+    sub_kern = np.ascontiguousarray(kernel[:, active_in, :])
+
+    valid_len = len(rib_cells) - (k_size - 1)
+    conv_out = np.empty((valid_len, out_channels), dtype=np.float32)
+    conv_out[:] = bias
+    for offset in range(k_size):
+        k_slice = sub_kern[offset]
+        if k_slice.any():
+            conv_out += sub_cells[offset : offset + valid_len] @ k_slice
+    active_out = np.maximum(conv_out[rib_pos - pad], 0.0)
+    return np.add.reduceat(active_out, line_starts, axis=0)
+
+
+def _block01_active_lines(
+    params: dict[str, np.ndarray],
+    grid: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Run Block 0 masking and Block 1 k=3/7/13/sketch convolutions on occupied cell spans."""
+    num_lines, max_width = grid.shape
+    col_pos = np.arange(1, max_width + 1, dtype=np.int32)[None, :]
+    row_lens = np.max(np.where(grid != 0, col_pos, 0), axis=1)
+    nonblank = np.flatnonzero(row_lens > 0)
+
+    col_sums = np.zeros((num_lines, params["col_sum_proj"].shape[1]), dtype=np.float32)
+    conv3 = np.zeros((num_lines, params["conv3_w"].shape[2]), dtype=np.float32)
+    conv7 = np.zeros((num_lines, params["conv7_w"].shape[2]), dtype=np.float32)
+    conv13 = np.zeros((num_lines, params["conv13_w"].shape[2]), dtype=np.float32)
+    raw_sketch = np.zeros((num_lines, params["sketch_w"].shape[2]), dtype=np.float32)
+    if len(nonblank) == 0:
+        return col_sums, conv3, conv7, conv13, raw_sketch
+
+    span_lens = np.minimum(max_width, row_lens[nonblank] + _RIBBON_GUARD)
+    line_starts = np.cumsum(span_lens) - span_lens
+    total_active = int(np.sum(span_lens))
+    line_ids = np.repeat(np.arange(len(nonblank), dtype=np.int32), span_lens)
+    within_col = np.arange(total_active, dtype=np.int32) - line_starts[line_ids]
+
+    codes = grid[nonblank[line_ids], within_col]
+    emb_act = params["tok_emb"][codes] + params["col_emb"][within_col]
+
+    pre_starts = np.empty(len(nonblank) + 1, dtype=np.int32)
+    pre_starts[0] = 1
+    np.cumsum(span_lens + 1, out=pre_starts[1:])
+    pre_pos = pre_starts[:-1][line_ids] + within_col
+    rib_emb = np.zeros((int(pre_starts[-1]) + 1, emb_act.shape[1]), dtype=np.float32)
+    rib_emb[pre_pos] = emb_act
+
+    pre_w = params["pre_conv3_w"]
+    lex_len = len(rib_emb) - 2
+    lex_rib = np.broadcast_to(params["pre_conv3_b"], (lex_len, pre_w.shape[2])).copy()
+    for offset in range(3):
+        lex_rib += rib_emb[offset : offset + lex_len] @ pre_w[offset]
+    lex_act = np.maximum(lex_rib[pre_pos - 1], 0.0)
+
+    has_prev = (line_starts > 0)[:, None]
+    prev_idx = np.maximum(line_starts - 1, 0)
+    pref1_in = np.concatenate([emb_act, lex_act], axis=-1) @ params["pref1_proj"]
+    pref1_cs = np.cumsum(pref1_in, axis=0)
+    pref1_base = np.where(has_prev, pref1_cs[prev_idx], 0.0)
+    prefix1 = pref1_cs - pref1_base[line_ids] - pref1_in
+
+    gate_in = np.concatenate([emb_act, lex_act, prefix1], axis=-1)
+    gates = np.maximum(gate_in @ params["gate1_w"] + params["gate1_b"], 0.0)
+    pref2_in = gates @ params["pref2_proj"]
+    pref2_cs = np.cumsum(pref2_in, axis=0)
+    pref2_base = np.where(has_prev, pref2_cs[prev_idx], 0.0)
+    prefix2 = pref2_cs - pref2_base[line_ids]
+
+    fuse_in = np.concatenate([emb_act, lex_act, gates, prefix2], axis=-1)
+    cells_act = np.maximum(fuse_in @ params["col_fuse_w"] + params["col_fuse_b"], 0.0)
+    col_sums[nonblank] = np.add.reduceat(cells_act, line_starts, axis=0) @ params["col_sum_proj"]
+
+    rib_starts = np.empty(len(nonblank) + 1, dtype=np.int32)
+    rib_starts[0] = _RIBBON_GUARD
+    np.cumsum(span_lens + _RIBBON_GUARD, out=rib_starts[1:])
+    rib_pos = rib_starts[:-1][line_ids] + within_col
+    rib_cells = np.empty((int(rib_starts[-1]) + _RIBBON_GUARD, cells_act.shape[1]), dtype=np.float32)
+    rib_cells[:] = np.maximum(params["col_fuse_b"], 0.0)
+    rib_cells[rib_pos] = cells_act
+
+    conv3[nonblank] = _ribbon_conv_sum(
+        rib_cells, rib_pos, line_starts, params["conv3_w"], params["conv3_b"]
+    )
+    conv7[nonblank] = _ribbon_conv_sum(
+        rib_cells, rib_pos, line_starts, params["conv7_w"], params["conv7_b"]
+    )
+    conv13[nonblank] = _ribbon_conv_sum(
+        rib_cells, rib_pos, line_starts, params["conv13_w"], params["conv13_b"]
+    )
+    raw_sketch[nonblank] = _ribbon_conv_sum(
+        rib_cells, rib_pos, line_starts, params["sketch_w"], params["sketch_b"]
+    )
+    return col_sums, conv3, conv7, conv13, raw_sketch
+
+
+def _attend_banded_heads(
+    q_proj: np.ndarray | None,
+    k_proj: np.ndarray | None,
+    v_proj: np.ndarray,
+    b_rel: np.ndarray,
+    b_sink: np.ndarray,
+    banded: list[int],
+    inv_scale: np.float32,
+) -> np.ndarray:
+    num_lines = v_proj.shape[1]
+    val_dim = v_proj.shape[2]
+    rad = MAX_REL_DIST
+    win = 2 * rad + 1
+    num_b = len(banded)
+
+    q_sub = q_proj[banded] * inv_scale if q_proj is not None else None
+    k_sub = k_proj[banded] if k_proj is not None else None
+    v_sub = v_proj[banded]
+    rel_sub = b_rel[banded]
+
+    logits = np.full((num_b, num_lines, win + 1), -1e9, dtype=np.float32)
+    logits[:, :, win] = b_sink[banded, None]
+    active_offsets = [off for off in range(-rad + 1, rad) if np.any(rel_sub[:, off + rad] > -1e3)]
+
+    for off in active_offsets:
+        q_start, q_end = max(0, -off), min(num_lines, num_lines - off)
+        if q_start >= q_end:
+            continue
+        slot = off + rad
+        bias_col = rel_sub[:, slot : slot + 1]
+        if q_sub is not None and k_sub is not None:
+            dots = np.sum(
+                q_sub[:, q_start:q_end, :] * k_sub[:, q_start + off : q_end + off, :],
+                axis=-1,
+            )
+            logits[:, q_start:q_end, slot] = dots + bias_col
+        else:
+            logits[:, q_start:q_end, slot] = bias_col
+
+    weights = _softmax(logits)
+    out = np.zeros((num_b, num_lines, val_dim), dtype=np.float32)
+    for off in active_offsets:
+        q_start, q_end = max(0, -off), min(num_lines, num_lines - off)
+        if q_start >= q_end:
+            continue
+        slot = off + rad
+        out[:, q_start:q_end, :] += (
+            weights[:, q_start:q_end, slot : slot + 1] * v_sub[:, q_start + off : q_end + off, :]
+        )
+    return out
 
 
 def _sink_attn(
@@ -146,29 +311,50 @@ def _sink_attn(
     b_rel: np.ndarray,
     b_sink: np.ndarray,
 ) -> np.ndarray:
-    """Multi-head relative-offset attention across lines with an unmatched-query sink logit."""
+    """Multi-head relative-offset attention across lines with O(L) banded execution."""
     num_lines, num_heads = state.shape[0], b_sink.shape[0]
     head_dim = wq.shape[1] // num_heads
-    q_proj, k_proj, v_proj = (
-        (state @ weight).reshape(num_lines, num_heads, -1).transpose(1, 0, 2)
-        for weight in (wq, wk, wv)
-    )
+    val_dim = wv.shape[1] // num_heads
 
-    line_idx = np.arange(num_lines)
-    rel_dist = line_idx[None, :] - line_idx[:, None]
-    rel_idx = np.clip(rel_dist, -MAX_REL_DIST, MAX_REL_DIST) + MAX_REL_DIST
+    v_proj = (state @ wv).reshape(num_lines, num_heads, val_dim).transpose(1, 0, 2)
+    has_qk = bool(np.any(wq != 0) and np.any(wk != 0))
+    q_proj = (state @ wq).reshape(num_lines, num_heads, head_dim).transpose(1, 0, 2) if has_qk else None
+    k_proj = (state @ wk).reshape(num_lines, num_heads, head_dim).transpose(1, 0, 2) if has_qk else None
+    inv_scale = np.float32(1.0 / np.sqrt(float(head_dim)))
 
-    scale = np.sqrt(float(head_dim))
-    attn_logits = (q_proj @ k_proj.transpose(0, 2, 1)) / scale + b_rel[:, rel_idx]
-    sink_col = np.broadcast_to(b_sink[:, None, None], (num_heads, num_lines, 1))
-    attn_weights = _softmax(np.concatenate([attn_logits, sink_col], axis=-1))[:, :, :num_lines]
-    merged = (attn_weights @ v_proj).transpose(1, 0, 2).reshape(num_lines, -1)
-    return merged @ wo
+    banded = [head for head in range(num_heads) if b_rel[head, 0] <= -1e3 and b_rel[head, -1] <= -1e3]
+    global_heads = [head for head in range(num_heads) if head not in banded]
+    merged = np.zeros((num_heads, num_lines, val_dim), dtype=np.float32)
+
+    if banded:
+        merged[banded] = _attend_banded_heads(
+            q_proj, k_proj, v_proj, b_rel, b_sink, banded, inv_scale
+        )
+
+    for head in global_heads:
+        h_slice = slice(head * head_dim, (head + 1) * head_dim)
+        qh_zero = (not has_qk) or (not np.any(wq[:, h_slice] != 0))
+        if qh_zero and np.all(b_rel[head] == 0.0):
+            weight = np.float32(1.0 / (float(num_lines) + float(np.exp(b_sink[head]))))
+            merged[head] = v_proj[head].sum(axis=0, keepdims=True) * weight
+            continue
+        line_idx = np.arange(num_lines)
+        raw_dist = line_idx[None, :] - line_idx[:, None]
+        rel_idx = np.clip(raw_dist, -MAX_REL_DIST, MAX_REL_DIST) + MAX_REL_DIST
+        logits_h = b_rel[head, rel_idx].copy()
+        if not qh_zero and q_proj is not None and k_proj is not None:
+            logits_h += (q_proj[head] @ k_proj[head].T) * inv_scale
+        sink_col = np.full((num_lines, 1), b_sink[head], dtype=np.float32)
+        weights_h = _softmax(np.concatenate([logits_h, sink_col], axis=-1))[:, :num_lines]
+        merged[head] = weights_h @ v_proj[head]
+
+    return merged.transpose(1, 0, 2).reshape(num_lines, -1) @ wo
 
 
-def encode_byte_grid(code: str, max_lines: int = 2048) -> tuple[np.ndarray, list[str]]:
+def encode_byte_grid(code: str, max_lines: int | None = None) -> tuple[np.ndarray, list[str]]:
     """Convert raw source text into a (lines, 128) uint8 grid of 7-bit ASCII codes."""
-    lines = (code.expandtabs(2).splitlines() or [""])[:max_lines]
+    all_lines = code.expandtabs(2).splitlines() or [""]
+    lines = all_lines[:max_lines] if max_lines is not None else all_lines
     grid = np.zeros((len(lines), MAX_COLS), dtype=np.uint8)
     for row, text in enumerate(lines):
         if not text:
@@ -183,32 +369,35 @@ def encode_byte_grid(code: str, max_lines: int = 2048) -> tuple[np.ndarray, list
     return grid, lines
 
 
+def _peak_window_density(state: np.ndarray, active_gate: np.ndarray) -> np.ndarray:
+    pos_weighted = _relu(state) * active_gate
+    zero_row = np.zeros((1, state.shape[1]), dtype=np.float32)
+    zero_gate = np.zeros((1, 1), dtype=np.float32)
+    pad_w = np.vstack([zero_row, np.cumsum(pos_weighted, axis=0)])
+    pad_g = np.vstack([zero_gate, np.cumsum(active_gate, axis=0)])
+    hi_idx = np.arange(1, len(state) + 1)
+    lo_idx = np.maximum(0, hi_idx - _PEAK_WINDOW)
+    win_gate = np.maximum(pad_g[hi_idx] - pad_g[lo_idx], _PEAK_MIN_GATE) + _PEAK_PRIOR
+    return ((pad_w[hi_idx] - pad_w[lo_idx]) / win_gate).max(axis=0)
+
+
 def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarray, ...]:
-    # Block 0: byte/column embeddings + causal quote and comment masks -> cells (L, W, 52)
-    width = grid.shape[1]
-    emb = params["tok_emb"][grid] + params["col_emb"][None, :width, :]
-    lex = _relu(_conv1d(emb, params["pre_conv3_w"], params["pre_conv3_b"]))
-
-    lex_cat = np.concatenate([emb, lex], axis=-1)
-    prefix1 = params["W_causal1"][:width, :width] @ (lex_cat @ params["pref1_proj"])
-    gates = _relu(
-        np.concatenate([emb, lex, prefix1], axis=-1) @ params["gate1_w"] + params["gate1_b"]
-    )
-    prefix2 = params["W_causal2"][:width, :width] @ (gates @ params["pref2_proj"])
-    cells = _relu(
-        np.concatenate([emb, lex, gates, prefix2], axis=-1) @ params["col_fuse_w"]
-        + params["col_fuse_b"]
-    )
-
-    # Block 1: k=3/7/13 pattern convolutions + 40-dim SimHash stem sketches -> state (L, N_Z)
-    conv3 = _relu(_conv1d(cells, params["conv3_w"], params["conv3_b"])).sum(axis=1)
-    conv7 = _relu(_conv1d(cells, params["conv7_w"], params["conv7_b"])).sum(axis=1)
-    conv13 = _relu(_conv1d(cells, params["conv13_w"], params["conv13_b"])).sum(axis=1)
-    col_sums = cells.sum(axis=1) @ params["col_sum_proj"]
-
-    raw_sketch = _relu(_conv1d(cells, params["sketch_w"], params["sketch_b"])).sum(axis=1)
+    # Blocks 0 & 1: quote/comment masking + k=3/7/13 convolutions + SimHash sketches
+    col_sums, conv3, conv7, conv13, raw_sketch = _block01_active_lines(params, grid)
     sketch = _relu(raw_sketch) - _relu(raw_sketch - 1.0)
-    line_feats = np.concatenate([col_sums, conv3, conv7, conv13], axis=-1)
+    raw_feats = np.concatenate([col_sums, conv3, conv7, conv13], axis=-1)
+
+    if "ml_proj" in params:
+        ml_deltas = raw_feats @ params["ml_proj"]
+        ml_excl = np.cumsum(ml_deltas, axis=0) - ml_deltas
+        ml_saw = _relu(ml_excl @ params["ml_gate_w"] + params["ml_gate_b"])
+        paren_suf = _relu(
+            _conv1d(ml_deltas[None, :, :], params["ml_paren_w"], params["ml_paren_b"])[0]
+        )
+        line_feats = np.concatenate([raw_feats, ml_saw, paren_suf], axis=-1)
+    else:
+        line_feats = raw_feats
+
     line_hidden = _relu(line_feats @ params["lmlp1_w"] + params["lmlp1_b"])
     line_stats = line_hidden @ params["lmlp2_w"] + params["lmlp2_b"]
     state = np.concatenate(
@@ -233,8 +422,13 @@ def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarra
     # Block 3: per-line squiggle probabilities + active-line pooling into System One logits
     line_probs = _sigmoid(state @ params["sq_w"] + params["sq_b"])
     active_gate = _sigmoid(state @ params["pool_gate_w"] + params["pool_gate_b"])
-    doc_mean = (state * active_gate).sum(axis=0) / (active_gate.sum(axis=0) + 1e-5)
-    doc_max = (_relu(state) * active_gate).max(axis=0)
+    prior_lines = _PRIOR_LINES if "ml_proj" in params else 1e-5
+    weighted = state * active_gate
+    doc_mean = weighted.sum(axis=0) / (active_gate.sum(axis=0) + prior_lines)
+    if "ml_proj" in params:
+        doc_max = _peak_window_density(state, active_gate)
+    else:
+        doc_max = (_relu(state) * active_gate).max(axis=0)
     doc_vec = np.concatenate([doc_mean, doc_max], axis=-1)
     doc_hidden = _relu(doc_vec @ params["doc1_w"] + params["doc1_b"])
     logits = doc_hidden @ params["doc2_w"] + params["doc2_b"]
@@ -356,7 +550,8 @@ def rl_reward(
         return 0.0
     res = score(code)
     blended = (1.0 - hygiene_blend) * res.score + hygiene_blend * res.rl_hygiene
-    return gate * (1.0 + weight * blended)
+    squiggle_damp = 1.0 / (1.0 + 1.5 * len(res.squiggles))
+    return gate * (1.0 + weight * blended * squiggle_damp)
 
 
 def render_report(
@@ -366,7 +561,7 @@ def render_report(
     color: bool = True,
     res: Result | None = None,
 ) -> str:
-    _, lines = encode_byte_grid(src, max_lines=100_000)
+    _, lines = encode_byte_grid(src)
     result = res or score(src, threshold=thresh)
     bold, dim, yel, cyan, grn, red, rst = _ANSI if color else ("",) * 7
     tone = (red, yel, grn)[int(result.score >= 0.40) + int(result.score >= 0.70)]

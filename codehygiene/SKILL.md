@@ -1,7 +1,7 @@
 ---
 name: codehygiene
 description: >-
-  Offline 10 ms readability gate for touched code in Python, TypeScript, JavaScript, Rust, Go, C, C++, Zig, Java, C#, and Lua. Catches structural smells formatters miss: narrator comments, swallowed errors, deep nesting, `*Factory`/`*Manager` ceremony, cryptic 1-2 char names, magic indices, and duplicated blocks. Use on newly written or modified functions and small diffs rather than full-repository sweeps.
+  Offline readability gate (~7-50 ms on small diffs) for touched code in Python, TypeScript, JavaScript, Rust, Go, C, C++, Zig, Java, C#, and Lua. Catches structural smells formatters miss: narrator comments, swallowed errors, deep nesting, `*Factory`/`*Manager` ceremony, cryptic 1-2 char names, magic indices, and duplicated blocks. Use on newly written or modified functions and small diffs rather than full-repository sweeps.
 ---
 
 # Code Hygiene
@@ -17,7 +17,7 @@ Passing tests, typecheckers, and formatters (`ruff`, `eslint`, `prettier`, `rust
 
 ## Run It
 
-The pure-NumPy runtime (`__init__.py`, `__main__.py`) and `weights.npz` (`13 KiB` `1.58-bit` ternary model) are bundled inside `<SKILL_DIR>` (the directory containing this `SKILL.md`) and run offline across macOS, Linux, and Windows:
+The pure-NumPy runtime (`__init__.py`, `__main__.py`) and `weights.npz` (`14.5 KiB` `1.58-bit` ternary model) are bundled inside `<SKILL_DIR>` (the directory containing this `SKILL.md`) and run offline across macOS, Linux, and Windows:
 
 ```bash
 python3 "<SKILL_DIR>" <touched-files> --check --no-color

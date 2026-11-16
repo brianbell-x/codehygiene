@@ -1,15 +1,18 @@
 # codehygiene
 
-A 13 KB, 1.58-bit ternary weight-space programmed System One model for code readability and hygiene.
+A `14.5 KiB`, `1.58-bit` ternary weight-space programmed System One model for structural code readability.
 
 **[Try it on any GitHub repository →](https://brianbell-x.github.io/codehygiene/)**
 
 ![codehygiene diff](assets/diff.png)
 
-Traditional linters check syntax and formatting rules—code can pass every linter and unit test while still reading like cryptic golf or deeply nested, over-commented, copy-pasted AI slop. Instead of maintaining separate AST rules per language or calling a slow LLM judge, `codehygiene` runs a compact `574K`-parameter `1.58-bit` ternary neural network in pure NumPy (`~10 ms` on CPU across macOS, Linux, and Windows) for 11 languages (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`):
+`codehygiene` is a weight-space-programming demonstration and experimental readability gate. Every 2D/3D embedding, convolution, causal mask, attention, and readout matrix in `weights.npz` has entries strictly in `{-1, 0, +1}` (`691,516` trits packed at `5` trits/byte + `5,268` 1D channel scales/biases = `14.47 KiB`), compiled deterministically from mathematical circuits in [`compile.py`](compile.py) without training data or gradient descent.
 
-- **1.58-bit ternary weight-space programmed:** No training data or gradient descent is used. Every 2D/3D weight, convolution, causal, attention, and embedding matrix in `weights.npz` has entries strictly in `{-1, 0, +1}` (`569,662` trits packed at `5` trits/byte + `4,103` 1D channel scales/biases = `13.0 KiB`), compiled directly from explicit mathematical circuits in `compile.py`.
-- **System One judgment:** No text is generated. A single forward pass returns calibrated `0.0–1.0` hygiene scores, 6 style sub-scores, a style archetype, and line-level `Squiggle` diagnostics.
+Traditional syntax and AST linters (`ruff`, `eslint`, `pylint`, `clippy`) check surface formatting and syntactic rules—code can pass every linter and unit test while reading like cryptic variable golf or deeply nested, over-commented, copy-pasted AI slop. Conversely, `codehygiene` favors flat, low-ceremony code in ways dogmatic linter rules sometimes penalize (such as early-return guard clauses over single-exit rules, concise self-explanatory functions without restated boilerplate docstrings, and `i`/`j`/`k` indices in compact math loops):
+
+- **Hand-compiled ternary circuits (`compile.py`):** Polyglot lexical patterns (`k=3, 7, 13` convolutions), 4-gram SimHash identifier stem sketches, cross-line `"""`/`'''`/`/* */` docstring and block-comment masking, 16-line Dyck parenthesis balance, and `±32`-line relative-position sink attention are compiled directly into `35` ternary tensors executed in pure NumPy or browser `Float32Array` workers (`Python`, `C`, `C++`, `Rust`, `Go`, `Zig`, `JavaScript`, `TypeScript`, `Java`, `C#`, `Lua`).
+- **System One judgment:** No text is generated. A single forward pass (`~7 ms` on 12-line snippets, `~35 ms` on 65-line functions, `~200 ms` on 330-line files) returns `0.0–1.0` hygiene scores, 6 style sub-scores, a style archetype, and line-level `Squiggle` diagnostics across arbitrary-length files without a line-count cutoff.
+- **Explicit scope & limits:** Because weights are compiled from explicit structural and lexical circuits rather than learned semantic representations, `codehygiene` does **not** detect functional bugs, type errors, or security vulnerabilities (such as SQL injection)—pair it with unit tests, typecheckers, and SAST. On large legacy codebases, scope checks to newly written or modified functions rather than repo-wide sweeps.
 
 ## Example Output
 
@@ -48,7 +51,7 @@ npx skills check                              # verify installed skill matches m
 Or run the CLI directly via `uvx` / `pip`:
 
 ```bash
-uvx --from git+https://github.com/brianbell-x/codehygiene codehygiene .
+uvx --from git+https://github.com/brianbell-x/codehygiene codehygiene path/to/file.py --check
 pip install git+https://github.com/brianbell-x/codehygiene
 ```
 
@@ -56,7 +59,7 @@ pip install git+https://github.com/brianbell-x/codehygiene
 
 Live on GitHub Pages: **[https://brianbell-x.github.io/codehygiene/](https://brianbell-x.github.io/codehygiene/)**
 
-A zero-backend client-side repository scorer and playground is included in `docs/`. Any public GitHub repository URL (`https://github.com/owner/repo`) or pasted snippet is scored locally in the browser: the `12.97 KiB` `weights.npz` archive is unpacked via `DecompressionStream("deflate-raw")` and executed across a parallel Web Worker pool (`Float32Array`), producing a codebase hygiene summary, filterable directory scores, live squiggle underlines, polyglot **Before / After** presets, and an optional **Circuit X-ray** inspector (`Block 0` byte-grid masks and `Block 3` line probabilities):
+A zero-backend client-side repository scorer and playground is included in `docs/`. Any public GitHub repository URL (`https://github.com/owner/repo`) or pasted snippet is scored locally in the browser: the `14.47 KiB` `weights.npz` archive is unpacked via `DecompressionStream("deflate-raw")` and executed across a parallel Web Worker pool (`Float32Array`) with numerical parity (`< 1e-4` max delta) against the Python runtime:
 
 ```bash
 python3 -m http.server 8123 -d docs
@@ -67,42 +70,41 @@ python3 -m http.server 8123 -d docs
 Directories, file paths, globs, and piped `stdin` are accepted:
 
 ```bash
-codehygiene .                              # recursively lint supported source files
-codehygiene src/ --check                   # exit 1 if any squiggle >= threshold (CI / agent gate)
-codehygiene path/to/file.py --json         # structured JSON for coding agents & tooling
+codehygiene path/to/changed.py --check     # exit 1 if any squiggle >= threshold (touched-file gate)
+codehygiene path/to/file.py --json         # structured JSON for coding agents & hooks
 codehygiene "src/*.go" -t 0.60 --no-color  # custom squiggle probability threshold
 cat snippet.rs | codehygiene --json        # evaluate raw source from stdin
-`
+```
 
-Public release metadata on main is checked at most once every 12 hours (cached in the OS user cache directory outside <SKILL_DIR>) to print a one-line stderr notice when newer circuits or skill instructions are available; skipped automatically in CI or when --no-update-check / CODEHYGIENE_NO_UPDATE_CHECK=1 is set.``
+Public release metadata on `main` is checked at most once every 12 hours (cached in the OS user cache directory outside `<SKILL_DIR>`) to print a one-line `stderr` notice when newer circuits or skill instructions are available; skipped automatically in `CI` or when `--no-update-check` / `CODEHYGIENE_NO_UPDATE_CHECK=1` is set.
 
 ## Python & RL Reward API
 
 ```python
 import codehygiene
 
-res = codehygiene.score(code)                        # full Result object (~10 ms on CPU)
+res = codehygiene.score(code)                        # full Result object
 issues = codehygiene.lint(code, threshold=0.55)      # list[Squiggle]
-reward = codehygiene.rl_reward(code, tests_passed=True, weight=0.25)
+reward = codehygiene.rl_reward(code, tests_passed=True, weight=0.15)
 ```
 
-In RL coding loops (`GRPO`, `PPO`, verifiers), `rl_reward` is gated by test pass rate: broken solutions (`tests_passed <= 0`) always receive `0.0` so models cannot reward-hack by emitting clean-looking non-functional code, while passing solutions receive `1.0` to `1.25` based on code hygiene.
+In RL coding verifiers (`GRPO`, `PPO`), `rl_reward` multiplicatively gates on `tests_passed` (`<= 0` always yields `0.0`), pools worst-window 32-line issue density alongside Bayesian-shrunk document means, masks docstrings out of active-line denominators, and damps the hygiene bonus by `1 / (1 + 1.5 * len(squiggles))` so policies cannot inflate rewards via `pass -> ...`, appended dummy helpers, docstring padding, or placing code past line `2,048`. Because any fixed static circuit can eventually be Goodharted over long RL runs, keep `weight` modest (`0.10–0.20`) inside a functional test verifier.
 
 ## How It Works
 
-All inference happens in `_forward()` (`codehygiene/__init__.py`) using standard matrix multiplies, 1D convolutions, and attention—with zero regexes, tokenizers, or AST parsers:
+All inference runs in `_forward()` ([`codehygiene/__init__.py`](codehygiene/__init__.py)) using matrix multiplies, 1D convolutions, causal prefix sums, and banded attention—with zero regexes, tokenizers, or AST parsers at runtime:
 
-1. **2D ASCII Byte Grid (`encode_byte_grid`):** Source text is placed into a `(lines × 128 columns)` grid of 7-bit ASCII bytes, preserving visual indentation, alignment, and line width.
-2. **Left-to-Right String & Comment Masking (`Block 0`):** Causal prefix matrices scan across each line to track quote parity (`"` / `'`) and comment openers (`//`, `# `, `-- `, `/* */`), preventing words inside strings or comments from misfiring code detectors.
-3. **Pattern Convolutions & Word-Stem Sketches (`Block 1`):** Parallel `k=3, 7, 13` convolutions detect control-flow branches, chained operators, ceremonial naming (`*Factory`, `*Manager`), and golfed short-variable or magic-index soup (`xx = ...`, `[112]`), while 40 SimHash filters sketch 4-letter identifier stems separately in code and comments.
-4. **Cross-Line Sink Attention & Readout (`Blocks 2–3`):** Multi-head attention compares each line against neighbors (`±32` lines) and file-wide indentation statistics—catching comments whose stems repeat the next line's code (`noisy_comment`), swallowed error handlers (`swallowed_error`), duplicated blocks (`duplicate_block`), and deep pyramids (`deep_nesting`)—before pooling into file-level scores.
+1. **Full-File 2D ASCII Byte Grid (`encode_byte_grid`):** Source text is mapped into a `(lines × 128 columns)` grid of 7-bit ASCII bytes without line-count truncation, preserving visual indentation and line width while compacting blank lines and empty trailing columns.
+2. **Column & Cross-Line Comment/String Masking (`Blocks 0–1`):** Horizontal causal prefixes track single-line quote parity (`"` / `'`) and comment openers (`//`, `# `, `##`, `-- `, `/* */`), while a vertical causal prefix sawtooth and 16-line Dyck parenthesis filter (`ml_proj`, `ml_gate_w`, `ml_paren_w`) mask multiline `"""`/`'''` docstrings, `/* ... */` block comments, and hanging-indent parameter continuations.
+3. **Pattern Convolutions & SimHash Sketches (`Block 1`):** Parallel `k=3, 7, 13` ternary convolutions detect control-flow branches, chained operators, ceremonial/graveyard naming (`*Factory`, `*_old`, `*_deprecated`), and short-variable or magic-subscript walls (`let sp = tb[12] ^ tb[28]`), while 40 SimHash filters sketch 4-letter identifier stems separately in live code and comments.
+4. **Banded Sink Attention & Peak-Window Readout (`Blocks 2–3`):** Two `O(L)` 8-head attention passes (`±32` lines + Bayesian sink priors) evaluate comment-to-code stem repetition (`noisy_comment`), `try`/`catch`/`except` handlers across `L..L+6` (`swallowed_error`), class-relative nesting pyramids (`deep_nesting`), and distant-minus-adjacent clones (`duplicate_block`), before pooling document means and 32-line peak-window densities into file-level scores.
 
 ## Output Schema (`--json` / `Result.to_dict()`)
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `score` | `float` `[0, 1]` | Overall aesthetic score (`>= 0.70` clean, `0.40–0.70` mixed, `< 0.40` degraded). |
-| `rl_hygiene` | `float` `[0, 1]` | Anti-slop structural hygiene signal tailored for RL reward shaping. |
+| `score` | `float` `[0, 1]` | Overall structural readability score (`>= 0.70` clean, `0.40–0.70` mixed, `< 0.40` degraded). |
+| `rl_hygiene` | `float` `[0, 1]` | Anti-slop structural hygiene signal for test-gated RL reward shaping. |
 | `scores` | `dict[str, float]` | Six `[0, 1]` sub-scores: `flatness`, `naming`, `simplicity`, `comments`, `error_handling`, `layout`. |
 | `archetype` | `str` | Closest style profile: `minimal`, `clean`, `enterprise`, `dense`, or `slop`. |
 | `archetype_probs` | `dict[str, float]` | Probability distribution summing to `1.0` across all 5 style profiles. |
@@ -110,44 +112,48 @@ All inference happens in `_forward()` (`codehygiene/__init__.py`) using standard
 
 Squiggle `kind` values: `deep_nesting`, `poor_naming`, `noisy_comment`, `swallowed_error`, `dense_line`, `special_casing`, `duplicate_block`, `cramped_layout`.
 
-## Benchmarks
+## Benchmarks (`benchmarks/`)
 
-Evaluated with zero training across a 54-slice production canon (`27` files, `11` languages), annotated polyglot/anti-golf diagnostic suites, and `28` static AI-slop & defensive-paranoia circuits across `float32` (`v0.2`) and `1.58-bit` ternary (`v0.3`, `v0.4`) compilations:
+Checked-in evaluation suites in [`benchmarks/`](benchmarks/) separate **controlled in-sample circuit tests** (`benchmarks/suites.json`) from **adversarial RL-gaming probes** and **untuned held-out CPython 3.13 standard library modules** (`25` modules, `25,306` lines):
 
-| Metric | `float32` (`v0.2`) | `1.58-bit` Ternary (`v0.3`) | `1.58-bit` Ternary (`v0.4`) |
-| :--- | :---: | :---: | :---: |
-| **Matrix weight domain** | `float32` (`32.00` b/w) | `{-1, 0, +1}` (`425,044` trits) | **`{-1, 0, +1}` (`569,662` trits, `1.60` b/w)** |
-| **Uncompressed payload (`trits` + `vecs`)** | `1,668.41 KiB` | `95.74 KiB` | **`127.30 KiB`** (`111.28 KiB` trits + `16.03 KiB` vecs) |
-| **Compressed `weights.npz` on disk** | `33.03 KiB` (`33,821 B`) | `10.52 KiB` (`10,772 B`) | **`12.97 KiB` (`13,281 B`)** |
-| **Cold `.npz` load + unpack latency** | `8.03 ms` | `4.68–5.06 ms` | **`5.67 ms`** |
-| **Warm CPU latency (`12` / `65` / `391` lines)** | `9.68` / `69.2` / `464.6 ms` | `9.70` / `50.4` / `346.1 ms` | **`10.24` / `63.6` / `410.9 ms`** |
-| **Controlled diagnostic AUROC** (clean vs. messy) | `1.000` | `1.000` | **`1.000`** |
-| **Core squiggle & anti-golf recall** | `100%` (`14 / 14`) | `100%` (`14 / 14`) | **`100%` (`14 / 14`)** |
-| **Static AI-slop & paranoia recall** (`5` families) | `0%` (`0 / 28`) | `0%` (`0 / 28`) | **`100%` (`28 / 28`)** |
-| **Production canon squiggle rate** (`11` languages) | `1.99` / 100 lines | `2.05` / 100 lines | **`2.05` / 100 lines (`0` new FPs)** |
-| **Clean trap & repository self-lint false positives** | `1` (`catch` reset) | `1` (`catch` reset) | **`0` (`22 / 22` clean traps)** |
-
-## Agent Corpus Benchmark (GPT-OSS 120B Before / After)
-
-Evaluated in a controlled two-phase agent benchmark where `GPT-OSS 120B (Medium)` first built four dependency-free subsystems and frozen 8-scenario test suites without `codehygiene` (`before/`), then refactored each copy (`after/`) under `codehygiene/SKILL.md` and `codehygiene --check` while keeping all `64 / 64` tests green:
-
-| App | Language | Before Score | After Score | Delta | Squiggles (`B -> A`) | `rl_reward` (`B -> A`) | Tests (`B / A`) |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| `billing_python` | Python | `0.466` | **`0.802`** | `+0.336` | `7 -> 0` | `1.1292 -> 1.2058` | `8/8 · 8/8` |
-| `gateway_js` | JavaScript | `0.366` | **`0.912`** | `+0.546` | `5 -> 0` | `1.0961 -> 1.2278` | `8/8 · 8/8` |
-| `checkout_ts` | TypeScript | `0.525` | **`0.908`** | `+0.383` | `9 -> 0` | `1.1414 -> 1.2267` | `8/8 · 8/8` |
-| `matching_rust` | Rust | `0.053` | **`0.800`** | **`+0.748`** | `33 -> 0` | `1.0237 -> 1.2063` | `8/8 · 8/8` |
-| **Mean / Total** | **4 langs** | **`0.352`** | **`0.856`** | **`+0.503`** | **`54 -> 0`** | **`1.0976 -> 1.2167`** | **`64 / 64`** |
+| Evaluation Suite & Metric | `v0.4.0` (`12.97 KiB`) | `v0.5.0` (`14.47 KiB`) |
+| :--- | :---: | :---: |
+| **Ternary matrices & payload** | `32` (`569,662` trits + `4,103` vecs) | **`35` (`691,516` trits + `5,268` vecs)** |
+| **Controlled messy/slop recall** (`suites.json`, in-sample) | `17 / 18` (missed `except: ...`) | **`18 / 18` (`100%`, AUROC `1.000`)** |
+| **Clean traps & linter-divergent clean idioms** (`suites.json`) | `8 / 18` FPs (`x=1`, `matmul`, docstrings, `localhost`) | **`0 / 18` FPs (mean score `0.831`)** |
+| **Adversarial: `except: pass` vs `except: ...` `rl_reward` gap** | `+0.181` (bypassed) | **`0.0000` (both caught)** |
+| **Adversarial: slop + `40` appended trivial helpers (`rl_reward` gain)** | `+0.096` (`score` `0.098 -> 0.481`) | **`+0.007` (`score` `0.291 -> 0.437`, `3` sq kept)** |
+| **Adversarial: slop placed past line `2,048`** | `0` squiggles (`score` `0.897`, truncated) | **`4` squiggles (`score` `0.141`, full file)** |
+| **Python vs. browser `docs/engine.js` max score diff** | `< 0.0001` (`<= 2,048` lines) | **`0.0000` (arbitrary length)** |
+| **Held-out CPython 3.13 stdlib squiggle rate** (`25` files, `25,306` lines) | `6.09 / 100` lines (`1,388` sq, truncated) | **`2.02 / 100` lines (`511` sq, full files)** |
+| **Held-out CPython 3.13 stdlib median score** (all `25` / `<650` LOC) | `0.093` / `0.24` | **`0.386` / `0.588`** |
+| **Warm CPU latency (`12` / `65` / `333` / `2,649`-line `argparse.py`)** | `10.2` / `63.6` / `~380` / `3,902 ms` (`2,048L` cap) | **`~7` / `~35` / `~200` / `~1,500 ms` (`2,649L` full)** |
 
 ```bash
-python3 corpus/evaluate.py --check --run-tests
+python3 benchmarks/run_benchmarks.py --check
 ```
 
-Full sub-score breakdowns, squiggle distributions, and concrete agent failure modes caught during refactoring are documented in [`corpus/README.md`](corpus/README.md).
+## GPT-OSS 120B Before / After Case Study (`gpt-oss-example/`)
+
+Four dependency-free subsystems built by `GPT-OSS 120B (Medium)` without `codehygiene` (`before/`), then refactored against `codehygiene --check` (`after/`) while holding all `64 / 64` unit test executions green. Because `after/` was refactored directly against the gate, weight-independent structural metrics (`Max Indent`, `Lines >100 Cols`, `Comment Lines`, `LOC`) are reported alongside `codehygiene` scores:
+
+| App | Lang | Score (`B -> A`) | Squiggles (`B -> A`) | `rl_reward` (`B -> A`) | Max Indent (`B -> A`) | `>100` Cols (`B -> A`) | LOC (`B -> A`) | Tests |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `billing_python` | Python | `0.779 -> 0.862` | `6 -> 0` | `1.0198 -> 1.2184` | `28 -> 16` | `4 -> 1` | `333 -> 275` | `8/8 · 8/8` |
+| `gateway_js` | JS | `0.840 -> 0.886` | `5 -> 0` | `1.0249 -> 1.2230` | `6 -> 6` | `6 -> 4` | `205 -> 194` | `8/8 · 8/8` |
+| `checkout_ts` | TS | `0.698 -> 0.892` | `9 -> 0` | `1.0119 -> 1.2240` | `6 -> 8` | `3 -> 1` | `229 -> 236` | `8/8 · 8/8` |
+| `matching_rust` | Rust | `0.024 -> 0.855` | `27 -> 0` | `1.0003 -> 1.2171` | `24 -> 16` | `16 -> 1` | `312 -> 488` | `8/8 · 8/8` |
+| **Mean / Total** | **4 langs** | **`0.585 -> 0.874`** | **`47 -> 0`** | **`1.0142 -> 1.2206`** | — | **`29 -> 7`** | **`1,079 -> 1,193`** | **`64 / 64`** |
+
+```bash
+python3 gpt-oss-example/evaluate.py --check --run-tests
+```
+
+Full breakdowns, LOC trade-offs (including `matching_rust`'s `+56%` expansion from splitting 121-column one-liners and 5-level loops into typed helpers while eliminating `7` `rustc` warnings), and methodology notes are in [`gpt-oss-example/README.md`](gpt-oss-example/README.md).
 
 ## Build Weights
 
-All `32` ternary `{-1, 0, +1}` matrices (`569,662` trits packed at `5` trits per `uint8` byte, `93.5%` zero) and `4,103` 1D scale/bias scalars in `codehygiene/weights.npz` (`12.97 KiB`) are deterministically generated from `compile.py`:
+All `35` ternary `{-1, 0, +1}` matrices (`691,516` trits packed at `5` trits per `uint8` byte) and `5,268` 1D scale/bias scalars in `codehygiene/weights.npz` and `docs/weights.npz` (`14.47 KiB`) are deterministically compiled from [`compile.py`](compile.py):
 
 ```bash
 python3 compile.py

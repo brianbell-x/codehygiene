@@ -1,13 +1,14 @@
 """Closed-form 1.58-bit Ternary Weight-Space Program compiling circuits into weights.npz.
 
 Every 2D/3D weight, convolution, projection, causal, and embedding tensor in the model
-has entries strictly in {-1, 0, +1} (569,662 trits packed at 5 trits per uint8 byte,
-1.60 bits/weight), paired only with 1D per-output-channel scales and biases:
-  - Block 0 (_build_block0): Maps (L, 128) ASCII bytes + column positions into 52 per-cell
+has entries strictly in {-1, 0, +1} (packed at 5 trits per uint8 byte), paired only with
+1D per-output-channel scales and biases:
+  - Block 0 (_build_block0): Maps (L, 128) ASCII bytes + column positions into 54 per-cell
     channels (HC_*), using causal prefix matrices and De Morgan closer gates to mask strings
-    (16-quote sawtooth) and polyglot comments (//, /* */, # , -- ) left-to-right.
-  - Block 1 (_build_block1): Runs k=3, 7, 13 {-1, 0, +1} integer-margin convolutions and
-    40 SimHash stem filters (_sketch_bank) for live code and inline comments.
+    (16-quote sawtooth) and single-line comments (//, /* */, # , -- ) left-to-right.
+  - Block 1 (_build_block1): Runs k=3, 7, 13 {-1, 0, +1} integer-margin convolutions,
+    cross-line docstring/comment sawtooth + Dyck paren-balance filters (ml_proj, ml_gate_w,
+    ml_paren_w), and 40 SimHash stem filters (_sketch_bank).
   - Block 2 (_build_block2_and_heads): Two cross-line sink-attention + MLP passes using
     Paley Hadamard and Gram-fitted ternary projections populate context and issue registers.
   - Block 3 (_build_block2_and_heads): Projects Z into 8 per-line squiggle probabilities
@@ -32,7 +33,7 @@ _STOPWORDS = (
     "expo xpor modu odul data chan self none elif pass"
 ).split()
 
-# Per-cell feature channels emitted by Block 0 (52 channels per grid cell)
+# Per-cell feature channels emitted by Block 0 (54 channels per grid cell)
 (
     HC_ACT, HC_COMM, HC_CODE, HC_CNS, HC_MNS, HC_IND, HC_FNS, HC_ODD,
     HC_M42, HC_M40, HC_D8, HC_D10, HC_D12, HC_G80, HC_G96, HC_ID,
@@ -40,10 +41,10 @@ _STOPWORDS = (
     HC_LB, HC_RB, HC_LP, HC_RP, HC_SEM, HC_SK_VETO, HC_QT, HC_SL_BOOST,
 ) = range(32)
 HC_BP, HC_BN, HC_G110, HC_SL_C = 32, 39, 46, 47
-HC_STR, HC_LEAD, HC_D16, HC_D20 = 48, 49, 50, 51
-N_HC = 52
+HC_STR, HC_LEAD, HC_D16, HC_D20, HC_D24, HC_RAW_STR = range(48, 54)
+N_HC = 54
 
-# Byte and column embedding layout inside Block 0 (46 channels)
+# Byte and column embedding layout inside Block 0 (47 channels)
 EMB_ACTIVE, EMB_NONSPACE, EMB_SPACE = 0, 1, 2
 EMB_LOWER, EMB_UPPER, EMB_DIGIT, EMB_IDENT = 3, 4, 5, 6
 EMB_UND, EMB_SLASH, EMB_STAR, EMB_COLON, EMB_QMARK, EMB_DOT, EMB_EQ = range(7, 14)
@@ -55,13 +56,14 @@ EMB_COL_GE8, EMB_COL_GE10, EMB_COL_GE12 = 32, 33, 34
 EMB_COL_GE80, EMB_COL_GE96, EMB_COL_GE110 = 35, 36, 37
 EMB_COL_GE16, EMB_COL_GE20 = 38, 39
 EMB_DQUOTE, EMB_SQUOTE, EMB_BACKSLASH, EMB_HASH, EMB_DASH, EMB_LIFE_PFX = range(40, 46)
-N_EMB = 46
+EMB_COL_GE24 = 46
+N_EMB = 47
 
 # Block 0 lexical pre-convolution, causal prefixes, and quote/comment gates
 (
     PRE_SLASH_COMM, PRE_BLOCK_OPEN, PRE_BLOCK_CLOSE, PRE_HASH_COMM,
-    PRE_DASH_COMM, PRE_DQUOTE, PRE_SQUOTE, PRE_APOSTROPHE,
-) = range(8)
+    PRE_DASH_COMM, PRE_DQUOTE, PRE_SQUOTE, PRE_APOSTROPHE, PRE_HASH2_COMM,
+) = range(9)
 N_PRE = 16
 C1_NONSPACE, C1_DQUOTES, C1_SQUOTES, C1_BLOCK_OPENS = range(4)
 N_PREF1 = 4
@@ -69,13 +71,21 @@ N_PREF1 = 4
 G1_INDENT_SPACE, G1_FIRST_NONSPACE, G1_DOC_STAR, G1_ANY_COMM_START = 0, 1, 2, 3
 G1_CLOSE_HI, G1_INDENT_BASE, G1_LINE_COMM_START = 4, 5, 13
 G1_LEAD_TWO, G1_LEAD_ONE, G1_DQUOTE_SAW, G1_SQUOTE_SAW, G1_CLOSE_LO = 14, 15, 16, 32, 48
+G1_IND_GE24 = 49
 N_GATE1 = 50
 C2_IN_COMMENT, C2_IN_LINE_COMM, C2_IN_COMM_B, C2_IN_COMM_C = 0, 1, 2, 3
 N_PREF2 = 4
 
-# Line-level residual stream Z registers (226 channels per line)
-N_LMLP2 = 146
-N_Z = 226
+# Cross-line delimiter sawtooth & Dyck parenthesis balance dimensions
+N_DQ_SAW = 384
+N_SQ_SAW = 128
+N_ML_GATE = N_DQ_SAW + N_SQ_SAW + 2
+N_PAREN_STEPS = 16
+N_PAREN_SUF = 2 * N_PAREN_STEPS
+
+# Line-level residual stream Z registers (238 channels per line)
+N_LMLP2 = 158
+N_Z = 238
 (
     Z_ACTIVE, Z_HAS_CODE, Z_PURE_COMMENT, Z_OPEN_NET, Z_INDENT,
     Z_DEPTH8, Z_DEPTH10, Z_DEPTH12, Z_ODD_INDENT, Z_MOD4_EQ2, Z_MOD4_EQ0,
@@ -91,7 +101,7 @@ N_Z = 226
     Z_SHORT_GOLF, Z_MAGIC_NUM,
 ) = range(20, 40)
 
-# Cross-line attention context registers (Z[40..63]) and SimHash slices (Z[148..228])
+# Cross-line attention context registers (Z[40..63])
 (
     Z_RESTATES_CODE, Z_NEAR_REAL_HANDLER, Z_NEAR_EMPTY_HANDLER,
     Z_ENCLOSING_DEPTH, Z_ENCLOSING_BRANCHES, Z_ENCLOSING_GUARDS,
@@ -117,22 +127,27 @@ N_Z = 226
     Z_IS_INDENTED,
 ) = range(80, 87)
 
-# v0.4 static slop and paranoia registers (Z[111..145]; Z[87..110] hold helper_specs)
+# Static slop, paranoia, and v0.5 multiline/container registers (Z[113..157]; Z[87..112] helpers)
 (
     Z_SIG_OPEN, Z_STATIC_TYPE, Z_SIG_VETO, Z_SEMI_ONLY,
     Z_IF_LINE, Z_TYPE_HEDGE, Z_FAIL_FAST, Z_NEUTRAL_RET,
     Z_HAS_ENV, Z_TWO_ENVS, Z_HAS_COALESCE, Z_DEV_DEFAULT,
     Z_ENV_VETO, Z_HAS_ASSIGN, Z_ELISION_RAW, Z_LINE_COMM_VETO,
     Z_COMM_FENCE, Z_COMM_STRONG_CUE, Z_COMM_ASSIGN, Z_COMM_FCALL,
-) = range(111, 131)
+) = range(113, 133)
 (
     Z_NEAR_COMM_FENCE, Z_TYPED_INTERNAL_SIG, Z_BOUNDARY_SIG_LINE,
     Z_TYPE_HEDGE_IF, Z_ENV_CHAIN_1L, Z_ENV_DEV_1L,
     Z_CONT_ENV, Z_CONT_DEV_DEF, Z_COMM_CODE_LINE,
     Z_SMOOTH_COMM_CODE, Z_HAS_RECENT_TYPED_SIG, Z_NEAR_NEUTRAL_RET,
     Z_NEXT_CONT_ENV, Z_NEXT_CONT_DEV, Z_NEXT_FAIL_FAST,
-) = range(131, 146)
-Z_CODE_SKETCH, Z_COMM_SKETCH, SKETCH_DIM = 146, 186, 40
+) = range(133, 148)
+(
+    Z_IN_DOC, Z_IN_PAREN, Z_CONTAINER_HDR, Z_PYR_CLASS,
+    Z_FILE_CONTAINERS, Z_HAS_CONTAINER, Z_ENCLOSING_DEEP24,
+    Z_RAW_NEST_TOP, Z_SHALLOW_LINE, Z_CRYPTIC_GATE,
+) = range(148, 158)
+Z_CODE_SKETCH, Z_COMM_SKETCH, SKETCH_DIM = 158, 198, 40
 
 # Named attention head slices
 H0_QK = slice(0, 16)
@@ -187,16 +202,21 @@ def _sub_filter(
     wl: int = 0,
     wr: int = 0,
     cs: int = 0,
+    req_left_id: int = 0,
     out_scale: float = 1.0,
 ) -> None:
     """Write a {-1, 0, +1} ASCII bit-template into `channel` using integer max-bound margin."""
-    span = len(pattern) + wl + wr
-    start = (kernel.shape[0] - span) // 2 + wl
+    left_pad = max(wl, req_left_id)
+    span = len(pattern) + left_pad + wr
+    start = (kernel.shape[0] - span) // 2 + left_pad
     kernel[:, :, channel] = 0
     thresh = 7 * len(pattern)
 
     if wl:
         kernel[start - 1, HC_ID, channel] = -1
+    elif req_left_id:
+        kernel[start - 1, HC_ID, channel] = 1
+        thresh += 1
     if wr:
         kernel[start + len(pattern), HC_ID, channel] = -1
     if lead:
@@ -336,13 +356,13 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
     tok_emb[1:, EMB_ACTIVE] = 1
     tok_emb[33:, EMB_NONSPACE] = 1
     tok_emb[32, EMB_SPACE] = 1
-    tok_emb[97:123, EMB_LOWER] = 1
-    tok_emb[65:91, EMB_UPPER] = 1
-    tok_emb[48:58, EMB_DIGIT] = 1
+    tok_emb[ord("a") : ord("z") + 1, EMB_LOWER] = 1
+    tok_emb[ord("A") : ord("Z") + 1, EMB_UPPER] = 1
+    tok_emb[ord("0") : ord("9") + 1, EMB_DIGIT] = 1
 
     for byte_val in range(1, 128):
         char = chr(byte_val)
-        tok_emb[byte_val, EMB_IDENT] = int(char.isalnum() or char in "_$#")
+        tok_emb[byte_val, EMB_IDENT] = int(char.isalnum() or char in "_$")
         bits = ((ord(char.lower()) & 0x7F) >> _BITS7) & 1
         tok_emb[byte_val, EMB_ASCII_BITS : EMB_ASCII_BITS + 7] = bits.astype(np.int8)
 
@@ -363,7 +383,7 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
     col_thresholds = (
         (8, EMB_COL_GE8), (10, EMB_COL_GE10), (12, EMB_COL_GE12),
         (80, EMB_COL_GE80), (96, EMB_COL_GE96), (110, EMB_COL_GE110),
-        (16, EMB_COL_GE16), (20, EMB_COL_GE20),
+        (16, EMB_COL_GE16), (20, EMB_COL_GE20), (24, EMB_COL_GE24),
     )
     for min_col, dst_col in col_thresholds:
         col_emb[col_idx >= min_col, dst_col] = 1
@@ -385,6 +405,10 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
     pre_w[0, EMB_NONSPACE, PRE_HASH_COMM] = -1
     pre_w[[1, 2], [EMB_HASH, EMB_SPACE], PRE_HASH_COMM] = 1
     pre_s[PRE_HASH_COMM], pre_b[PRE_HASH_COMM] = 2.0, -3.0
+
+    pre_w[0, EMB_NONSPACE, PRE_HASH2_COMM] = -1
+    pre_w[[1, 2], EMB_HASH, PRE_HASH2_COMM] = 1
+    pre_s[PRE_HASH2_COMM], pre_b[PRE_HASH2_COMM] = 2.0, -3.0
 
     pre_w[[0, 1, 2], [EMB_DASH, EMB_DASH, EMB_SPACE], PRE_DASH_COMM] = 1
     pre_s[PRE_DASH_COMM], pre_b[PRE_DASH_COMM] = 2.0, -5.0
@@ -427,9 +451,12 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
 
     any_comm = [
         off_pre + PRE_SLASH_COMM, off_pre + PRE_BLOCK_OPEN,
-        off_pre + PRE_HASH_COMM, off_pre + PRE_DASH_COMM,
+        off_pre + PRE_HASH_COMM, off_pre + PRE_HASH2_COMM, off_pre + PRE_DASH_COMM,
     ]
-    line_comm = [off_pre + PRE_SLASH_COMM, off_pre + PRE_HASH_COMM, off_pre + PRE_DASH_COMM]
+    line_comm = [
+        off_pre + PRE_SLASH_COMM, off_pre + PRE_HASH_COMM,
+        off_pre + PRE_HASH2_COMM, off_pre + PRE_DASH_COMM,
+    ]
     gate1_w[any_comm, G1_ANY_COMM_START] = 1
     gate1_w[line_comm, G1_LINE_COMM_START] = 1
     gate1_w[off_pre + PRE_BLOCK_CLOSE, [G1_CLOSE_HI, G1_CLOSE_LO]] = 1
@@ -445,6 +472,10 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
             1, 1, -1, -1,
         ]
         gate1_s[dst_gate], gate1_b[dst_gate] = 2.0, -3.0
+    gate1_w[[EMB_NONSPACE, EMB_COL_GE24, EMB_STAR, off_pref1 + C1_NONSPACE], G1_IND_GE24] = [
+        1, 1, -1, -1,
+    ]
+    gate1_s[G1_IND_GE24], gate1_b[G1_IND_GE24] = 2.0, -3.0
 
     gate1_w[off_pref1 + C1_NONSPACE, [G1_LEAD_TWO, G1_LEAD_ONE]] = -1
     gate1_b[[G1_LEAD_TWO, G1_LEAD_ONE]] = [2.0, 1.0]
@@ -464,7 +495,7 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
     pref2[G1_LINE_COMM_START, C2_IN_LINE_COMM] = 1
     trit_mats["pref2_proj"] = pref2
 
-    # Fuse [emb, pre_conv3, gate1, c2] into 52 per-cell HC_* channels in {-1, 0, +1}
+    # Fuse [emb, pre_conv3, gate1, c2] into 54 per-cell HC_* channels in {-1, 0, +1}
     off_gate1 = off_pref1
     off_pref2 = off_gate1 + N_GATE1
     fuse_w = np.zeros((off_pref2 + N_PREF2, N_HC), dtype=np.int8)
@@ -488,9 +519,10 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
     saw_trits = np.array([1] + [-1, 1] * 7 + [-1], dtype=np.int8)
     dquote_slice = slice(off_gate1 + G1_DQUOTE_SAW, off_gate1 + G1_DQUOTE_SAW + 16)
     squote_slice = slice(off_gate1 + G1_SQUOTE_SAW, off_gate1 + G1_SQUOTE_SAW + 16)
-    fuse_w[dquote_slice, HC_STR] = saw_trits
-    fuse_w[squote_slice, HC_STR] = saw_trits
+    fuse_w[dquote_slice, [HC_STR, HC_RAW_STR]] = saw_trits[:, None]
+    fuse_w[squote_slice, [HC_STR, HC_RAW_STR]] = saw_trits[:, None]
     fuse_w[in_comm_all, HC_STR] = -1
+    fuse_w[in_line_comm, HC_RAW_STR] = -1
 
     lead_srcs = [EMB_NONSPACE, off_gate1 + G1_LEAD_TWO, off_gate1 + G1_LEAD_ONE, *in_comm_pair]
     fuse_w[lead_srcs, HC_LEAD] = [1, 1, -1, -1, -1]
@@ -499,6 +531,8 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
     indent_hc_dsts = [HC_ODD, HC_M42, HC_M40, HC_D8, HC_D10, HC_D12, HC_D16, HC_D20]
     for offset, hc_dst in enumerate(indent_hc_dsts):
         fuse_w[[off_gate1 + G1_INDENT_BASE + offset, *in_comm_pair], hc_dst] = [1, -1, -1]
+    fuse_w[[off_gate1 + G1_IND_GE24, *in_comm_pair], HC_D24] = [1, -1, -1]
+
     width_gates = ((EMB_COL_GE80, HC_G80), (EMB_COL_GE96, HC_G96), (EMB_COL_GE110, HC_G110))
     for col_src, hc_dst in width_gates:
         fuse_w[[EMB_NONSPACE, col_src, *in_comm_pair], hc_dst] = [1, 1, -1, -1]
@@ -554,6 +588,8 @@ _K7_EXTENDED = (
     ("None", 1, 1, 1, 0), ("0.0", 1, 1, 0, 0), (" or []", 0, 0, 1, 0),
     (" or {}", 0, 0, 1, 0), (".unwrap", 0, 0, 1, 0), ("type(", 1, 0, 1, 0),
     ("from ", 1, 0, 1, 1), ("use ", 1, 0, 1, 1), ("assert(", 0, 0, 0, 0),
+    ("...", 0, 1, 0, 1), ("class ", 1, 0, 1, 1), ("impl ", 1, 0, 1, 1),
+    ("impl<", 1, 0, 1, 1),
 )
 
 _K7_V04_CODE = (
@@ -561,7 +597,7 @@ _K7_V04_CODE = (
     (": int", 0, 1, 1, 0), (": bool", 0, 1, 1, 0), (": list", 0, 1, 0, 0),
     (": dict", 0, 1, 0, 0), ("pub ", 1, 0, 1, 0), ("any", 1, 1, 1, 0),
     ("Any", 1, 1, 1, 0), ("null", 1, 1, 1, 0), ("= None", 0, 1, 1, 0),
-    (" | ", 0, 0, 0, 0), (" or ", 0, 0, 1, 0), ("0.0.0.0", 0, 0, 0, 0),
+    (" | ", 0, 0, 0, 0), (" or ", 0, 0, 1, 0), ("return;", 1, 0, 1, 1),
     ("_old", 0, 1, 0, 0), ("_bak", 0, 1, 0, 0),
 )
 
@@ -591,8 +627,8 @@ _K13_V04_CODE = (
     ("return 0", 1, 1, 1), ("return []", 1, 0, 1), ("return {}", 1, 0, 1),
     ('return ""', 1, 0, 1), ("return ''", 1, 0, 1), ("return null", 1, 1, 1),
     ("return None", 1, 1, 1), ("process.env", 1, 0, 1), (".meta.env", 0, 0, 1),
-    ("os.getenv(", 1, 0, 1), ("os.environ", 1, 0, 1), ("localhost", 0, 0, 0),
-    ("127.0.0.1", 0, 0, 0), ("sqlite://", 0, 0, 0), ("dev-secret", 0, 0, 0),
+    ("os.getenv(", 1, 0, 1), ("os.environ", 1, 0, 1), ("secret-key", 0, 0, 0),
+    ("password123", 0, 0, 0), ("namespace ", 1, 0, 1), ("dev-secret", 0, 0, 0),
     ("changeme", 0, 0, 0), (" as any", 0, 1, 1), ("as unknown", 1, 1, 1),
     ("cast(Any", 1, 1, 1), ("_backup", 0, 1, 0), ("_deprecated", 0, 1, 0),
     ("Deprecated", 0, 1, 1),
@@ -600,11 +636,13 @@ _K13_V04_CODE = (
 
 _K13_V04_COMM = (
     ("pyright: ign", 0), ("biome-ignore", 0), ("rest of ", 0),
-    ("existing ", 0), ("placeholder", 0), ("unchanged", 0),
+    ("existing cod", 0), ("placeholder", 0), ("remain uncha", 0),
     ("// const ", 1), ("  const ", 1), ("// let ", 1),
     ("  let ", 1), ("// return ", 1), ("# return ", 1),
     ("  return ", 1),
 )
+
+_SUFFIX_GRAVEYARD = frozenset({"_old", "_bak", "_backup", "_deprecated", "Deprecated"})
 
 _CSUM_SPECS = (
     ("code_chars", HC_CNS, 1.0),
@@ -623,7 +661,76 @@ _CSUM_SPECS = (
     ("close_braces", HC_RB, 1.0),
     ("comment_mask", HC_COMM, 1.0),
     ("has_nonspace", HC_FNS, 1.0),
+    ("depth_ge24", HC_D24, 1.0),
 )
+
+
+def _stamp_triple_quote(
+    conv7_w: np.ndarray,
+    conv7_s: np.ndarray,
+    conv7_b: np.ndarray,
+    channel: int,
+    quote_char: str,
+    require_lead: bool,
+) -> None:
+    for pos in (2, 3, 4):
+        _stamp_char(conv7_w, pos, channel, quote_char)
+    conv7_w[[1, 5], HC_QT, channel] = -1
+    conv7_w[3, HC_SL_C, channel] = -1
+    thresh = 21
+    if require_lead:
+        conv7_w[2, HC_LEAD, channel] = 1
+        thresh += 1
+    conv7_s[channel] = 2.0
+    conv7_b[channel] = -float(2 * thresh - 1)
+
+
+def _build_multiline_gates(
+    trit_mats: dict[str, np.ndarray],
+    vecs_1d: dict[str, np.ndarray],
+    feat: dict[str, int],
+    num_raw_u: int,
+) -> None:
+    """Compile {-1, 0, +1} docstring/block-comment sawtooth and 16-line Dyck paren filters."""
+    ml_proj = np.zeros((num_raw_u, 4), dtype=np.int8)
+    ml_proj[feat["triple_dq"], 0] = 1
+    ml_proj[feat["triple_sq"], 1] = 1
+    ml_proj[[feat["ml_bcomm_open"], feat["ml_bcomm_close"]], 2] = [1, -1]
+    ml_proj[[feat["code_lparen"], feat["code_rparen"]], 3] = [1, -1]
+    trit_mats["ml_proj"] = ml_proj
+    vecs_1d["ml_proj_s"] = np.ones((4,), dtype=np.float32)
+
+    ml_gate_w = np.zeros((4, N_ML_GATE), dtype=np.int8)
+    ml_gate_s = np.ones((N_ML_GATE,), dtype=np.float32)
+    ml_gate_b = np.zeros((N_ML_GATE,), dtype=np.float32)
+    for step in range(N_DQ_SAW):
+        saw_s = 2.0 if step > 0 else 1.0
+        ml_gate_w[0, step] = 1
+        ml_gate_s[step] = saw_s
+        ml_gate_b[step] = -float(step) * saw_s
+    for step in range(N_SQ_SAW):
+        col = N_DQ_SAW + step
+        saw_s = 2.0 if step > 0 else 1.0
+        ml_gate_w[1, col] = 1
+        ml_gate_s[col] = saw_s
+        ml_gate_b[col] = -float(step) * saw_s
+
+    bc_hi, bc_lo = N_DQ_SAW + N_SQ_SAW, N_DQ_SAW + N_SQ_SAW + 1
+    ml_gate_w[2, [bc_hi, bc_lo]] = 1
+    ml_gate_b[[bc_hi, bc_lo]] = [0.0, -1.0]
+    trit_mats["ml_gate_w"] = ml_gate_w
+    vecs_1d["ml_gate_s"], vecs_1d["ml_gate_b"] = ml_gate_s, ml_gate_b
+
+    ml_paren_w = np.zeros((2 * N_PAREN_STEPS + 1, 4, N_PAREN_SUF), dtype=np.int8)
+    ml_paren_s = np.ones((N_PAREN_SUF,), dtype=np.float32)
+    ml_paren_b = np.zeros((N_PAREN_SUF,), dtype=np.float32)
+    for step_k in range(N_PAREN_STEPS):
+        span_k = step_k + 1
+        u_hi, u_lo = 2 * step_k, 2 * step_k + 1
+        ml_paren_w[N_PAREN_STEPS - span_k : N_PAREN_STEPS, 3, [u_hi, u_lo]] = 1
+        ml_paren_b[[u_hi, u_lo]] = [0.0, -1.0]
+    trit_mats["ml_paren_w"] = ml_paren_w
+    vecs_1d["ml_paren_s"], vecs_1d["ml_paren_b"] = ml_paren_s, ml_paren_b
 
 
 def _build_block1(
@@ -632,7 +739,7 @@ def _build_block1(
 ) -> dict[str, int]:
     """Compile {-1, 0, +1} k=3/7/13 convolutions, SimHash bank, and line-feature MLP."""
     feat: dict[str, int] = {}
-    n_csum, n_conv3, n_conv7, n_conv13 = 16, 64, 128, 86
+    n_csum, n_conv3, n_conv7, n_conv13 = len(_CSUM_SPECS), 64, 140, 92
     off_c3 = n_csum
     off_c7 = off_c3 + n_conv3
     off_c13 = off_c7 + n_conv7
@@ -716,17 +823,44 @@ def _build_block1(
         _sub_filter(conv3_w, conv3_s, conv3_b, ch_i, pat, code=False, comm=True)
         feat[f"c:{pat}"] = off_c3 + ch_i
 
+    ch_brk1, ch_lp, ch_rp, ch_bopen, ch_bclose = 32, 33, 34, 35, 36
+    _stamp_char(conv3_w, 0, ch_brk1, "[")
+    conv3_w[1, HC_LO, ch_brk1] = 1
+    _stamp_char(conv3_w, 2, ch_brk1, "]")
+    conv3_w[1, [HC_COMM, HC_STR], ch_brk1] = -1
+    conv3_s[ch_brk1], conv3_b[ch_brk1] = 2.0, -29.0
+
+    conv3_w[1, [HC_LP, HC_COMM, HC_STR], ch_lp] = [1, -1, -1]
+    conv3_w[1, [HC_RP, HC_COMM, HC_STR], ch_rp] = [1, -1, -1]
+    conv3_s[[ch_lp, ch_rp]], conv3_b[[ch_lp, ch_rp]] = 2.0, -1.0
+
+    _stamp_char(conv3_w, 1, ch_bopen, "/")
+    _stamp_char(conv3_w, 2, ch_bopen, "*")
+    conv3_w[0, [HC_ID, HC_DOT, HC_QT], ch_bopen] = -1
+    conv3_w[1, [HC_RAW_STR, HC_SL_C], ch_bopen] = -1
+    _stamp_char(conv3_w, 1, ch_bclose, "*")
+    _stamp_char(conv3_w, 2, ch_bclose, "/")
+    conv3_w[0, HC_QT, ch_bclose] = -1
+    conv3_w[1, [HC_RAW_STR, HC_SL_C], ch_bclose] = -1
+    conv3_s[[ch_bopen, ch_bclose]], conv3_b[[ch_bopen, ch_bclose]] = 2.0, -27.0
+
+    v05_c3_names = ("bracket_1ch", "code_lparen", "code_rparen", "ml_bcomm_open", "ml_bcomm_close")
+    for ch_i, name in enumerate(v05_c3_names, 32):
+        feat[name] = off_c3 + ch_i
+
     conv7_w = np.zeros((7, N_HC, n_conv7), dtype=np.int8)
     conv7_s = np.ones((n_conv7,), dtype=np.float32)
     conv7_b = np.zeros((n_conv7,), dtype=np.float32)
-    str_bearing = {"|| '')", "strict'", "0.0.0.0"}
+    str_bearing = {"|| '')", "strict'"}
     k7_groups = ((0, _K7_PRIMARY), (60, _K7_EXTENDED), (85, _K7_V04_CODE))
     for start_ch, group in k7_groups:
         for offset, (pat, wl, wr, cs, ld) in enumerate(group):
             ch_i = start_ch + offset
             _sub_filter(
                 conv7_w, conv7_s, conv7_b, ch_i, pat,
-                wl=wl, wr=wr, cs=cs, lead=ld, no_str=(pat not in str_bearing),
+                wl=wl, wr=wr, cs=cs, lead=ld,
+                req_left_id=int(pat in _SUFFIX_GRAVEYARD),
+                no_str=(pat not in str_bearing),
             )
             feat[pat] = off_c7 + ch_i
 
@@ -741,13 +875,13 @@ def _build_block1(
         "eslint-", "@ts-ign", "initial", "loop th", "check i",
     )
     comm_cues_b = ("type: i", "noqa", "nolint")
-    for start_ch, group in ((50, comm_cues_a), (78, comm_cues_b)):
+    for start_ch, group in ((50, comm_cues_a), (79, comm_cues_b)):
         for offset, pat in enumerate(group):
             ch_i = start_ch + offset
             _sub_filter(conv7_w, conv7_s, conv7_b, ch_i, pat, code=False, comm=True)
             feat[pat] = off_c7 + ch_i
 
-    ch_short_lhs, ch_multi_dig, ch_magic_idx, ch_pascal = 81, 82, 83, 84
+    ch_short_lhs, ch_multi_dig, ch_magic_idx, ch_pascal = 113, 114, 115, 116
     conv7_w[1, [HC_LO, HC_LEAD], ch_short_lhs] = 1
     conv7_w[2, [HC_ID, HC_LEAD, HC_COMM, HC_STR], ch_short_lhs] = [1, 1, -1, -1]
     conv7_w[3, [HC_ACT, HC_CNS], ch_short_lhs] = [1, -1]
@@ -760,10 +894,21 @@ def _build_block1(
     conv7_w[3, HC_DIG, ch_multi_dig] = 1
     conv7_s[ch_multi_dig], conv7_b[ch_multi_dig] = 2.0, -3.0
 
-    conv7_w[1, HC_LB, ch_magic_idx] = 1
+    conv7_w[0, HC_ID, ch_magic_idx] = 1
+    _stamp_char(conv7_w, 1, ch_magic_idx, "[")
     conv7_w[2, [HC_DIG, HC_COMM, HC_STR], ch_magic_idx] = [1, -1, -1]
     conv7_w[3, HC_DIG, ch_magic_idx] = 1
-    conv7_s[ch_magic_idx], conv7_b[ch_magic_idx] = 2.0, -5.0
+    conv7_s[ch_magic_idx], conv7_b[ch_magic_idx] = 2.0, -19.0
+
+    ch_decl_short = 121
+    conv7_w[0, [HC_ACT, HC_CNS], ch_decl_short] = [1, -1]
+    conv7_w[1, HC_LO, ch_decl_short] = 1
+    conv7_w[2, [HC_LO, HC_COMM, HC_STR], ch_decl_short] = [1, -1, -1]
+    conv7_w[3, [HC_ACT, HC_CNS], ch_decl_short] = [1, -1]
+    conv7_w[4, HC_EQ, ch_decl_short] = 1
+    conv7_w[5, HC_EQ, ch_decl_short] = -1
+    conv7_s[ch_decl_short], conv7_b[ch_decl_short] = 2.0, -9.0
+    feat["decl_short_lhs"] = off_c7 + ch_decl_short
 
     conv7_w[1, HC_ID, ch_pascal] = 1
     _stamp_char(conv7_w, 2, ch_pascal, ":")
@@ -781,6 +926,13 @@ def _build_block1(
         ch_i = 102 + offset
         _sub_filter(conv7_w, conv7_s, conv7_b, ch_i, pat, code=False, comm=True, cs=cs)
         feat[f"c:{pat}"] = off_c7 + ch_i
+
+    _stamp_triple_quote(conv7_w, conv7_s, conv7_b, 117, '"', require_lead=False)
+    _stamp_triple_quote(conv7_w, conv7_s, conv7_b, 118, "'", require_lead=False)
+    _stamp_triple_quote(conv7_w, conv7_s, conv7_b, 119, '"', require_lead=True)
+    _stamp_triple_quote(conv7_w, conv7_s, conv7_b, 120, "'", require_lead=True)
+    for ch_i, name in enumerate(("triple_dq", "triple_sq", "lead_tdq", "lead_tsq"), 117):
+        feat[name] = off_c7 + ch_i
 
     conv13_w = np.zeros((13, N_HC, n_conv13), dtype=np.int8)
     conv13_s = np.ones((n_conv13,), dtype=np.float32)
@@ -805,14 +957,16 @@ def _build_block1(
         feat[pat] = off_c13 + ch_i
 
     str_k13 = {
-        'return ""', "return ''", "localhost",
-        "127.0.0.1", "sqlite://", "dev-secret", "changeme",
+        'return ""', "return ''", "secret-key",
+        "password123", "dev-secret", "changeme",
     }
     for offset, (pat, wl, wr, cs) in enumerate(_K13_V04_CODE):
         ch_i = 25 + offset
         _sub_filter(
             conv13_w, conv13_s, conv13_b, ch_i, pat,
-            wl=wl, wr=wr, cs=cs, no_str=(pat not in str_k13),
+            wl=wl, wr=wr, cs=cs,
+            req_left_id=int(pat in _SUFFIX_GRAVEYARD),
+            no_str=(pat not in str_k13),
         )
         feat[pat] = off_c13 + ch_i
 
@@ -820,6 +974,9 @@ def _build_block1(
         ch_i = 62 + offset
         _sub_filter(conv13_w, conv13_s, conv13_b, ch_i, pat, code=False, comm=True, cs=cs)
         feat[f"c:{pat}"] = off_c13 + ch_i
+
+    num_raw_u = n_csum + n_conv3 + n_conv7 + n_conv13
+    _build_multiline_gates(trit_mats, vecs_1d, feat, num_raw_u)
 
     # Declarative line-level rules compiled into strictly {-1, 0, +1} lmlp1_w & lmlp2_w
     module_headers = [
@@ -855,7 +1012,10 @@ def _build_block1(
         ("throw", -0.8), ("raise", -0.8),
     ] + module_headers
 
-    short_golf_terms = [("short_lhs", 1.5), ("one_char_id", 0.5)]
+    short_golf_terms = [
+        ("short_lhs", 1.5), ("decl_short_lhs", 1.5),
+        ("one_char_id", 0.5), ("bracket_1ch", -0.5), ("for", -1.0),
+    ]
     magic_num_terms = [("magic_index", 1.0), ("multi_digit", 0.30)]
     fallback_swallow_terms = [
         ("|| {}", 1.4), ("|| []", 1.4), ("|| '')", 1.0), (" or []", 1.4),
@@ -863,6 +1023,9 @@ def _build_block1(
         ("#[allow(", 0.7), ("eslint-disabl", 2.0), ("@ts-ignore", 2.0), ("?.", 0.45),
         (" as any", 1.8), ("as unknown", 1.8), ("cast(Any", 1.8),
         ("c:pyright: ign", 1.8), ("c:biome-ignore", 1.8),
+    ]
+    container_hdr_terms = [
+        ("class ", 2.0), ("impl ", 2.0), ("impl<", 2.0), ("namespace ", 2.0),
     ]
 
     line_rules: list[tuple[list[tuple[str, float]], float, int, float]] = [
@@ -887,7 +1050,9 @@ def _build_block1(
         ([("odd_indent", 1.0)], 0.0, Z_ODD_INDENT, 1.0),
         ([("mod4_eq2_indent", 1.0)], 0.0, Z_MOD4_EQ2, 1.0),
         ([("mod4_eq0_indent", 1.0)], 0.0, Z_MOD4_EQ0, 1.0),
-        ([("depth_ge16", 0.5), ("depth_ge20", 1.2)], 0.0, Z_DEEP_PYRAMID, 1.0),
+        ([("depth_ge16", 0.35), ("depth_ge20", 1.25), ("depth_ge24", 0.8)], 0.0, Z_DEEP_PYRAMID, 1.0),
+        ([("depth_ge24", 1.7)], 0.0, Z_PYR_CLASS, 1.0),
+        ([("depth_ge16", -1.0)], 1.0, Z_SHALLOW_LINE, 1.0),
         ([(name, 1.0) for name, _ in module_headers], 0.0, Z_MODULE_HEADER, 1.0),
 
         ([("if", 1.0), ("else", 0.8), ("for", 0.8), ("while", 0.8),
@@ -905,7 +1070,9 @@ def _build_block1(
         (stdlib_idiom_terms, 0.0, Z_STDLIB_IDIOM, 1.0),
         ([("ident_13ch", 0.11)] + [(key, -wt * 0.25) for key, wt in stdlib_idiom_terms],
          -1.05, Z_LONG_IDENT, 1.0),
-        ([("one_char_id", 1.0)], 0.0, Z_ONE_CHAR_ID, 1.0),
+        ([("one_char_id", 1.0), ("bracket_1ch", -1.0), ("for", -2.0)], 0.0, Z_ONE_CHAR_ID, 1.0),
+        ([("one_char_id", 1.0), ("bracket_1ch", -1.0), ("for", -2.0)], -1.0, Z_CRYPTIC_GATE, 1.0),
+        ([("one_char_id", 1.0), ("bracket_1ch", -1.0), ("for", -2.0)], -2.0, Z_CRYPTIC_GATE, -1.0),
         ([("three_char_id", 0.25)], 0.0, Z_WORD_COUNT, 0.9),
 
         ([("catch (", 1.0), ("except:", 1.2), ("except Excep", 1.2), ("except BaseE", 1.2)],
@@ -914,7 +1081,7 @@ def _build_block1(
         ([("throw", 1.5), ("raise", 1.5), (".code", 1.5), ("reject(", 1.5),
           ("cb(", 1.5), ("emit(", 1.0), ("destroy", 1.2), ("callback(", 1.5)],
          0.0, Z_REAL_HANDLER, 1.0),
-        ([("{}", 1.5), ("console", 1.2), ("pass", 1.4)],
+        ([("{}", 1.5), ("console", 1.2), ("pass", 1.4), ("...", 1.5)],
          0.0, Z_EMPTY_HANDLER, 1.0),
         ([("return", 1.0), ("None", 1.0), ("0.0", 1.0), ("null;", 1.0), ("false;", 1.0)],
          -1.5, Z_EMPTY_HANDLER, 3.4),
@@ -941,6 +1108,8 @@ def _build_block1(
         (magic_num_terms, -1.95, Z_MAGIC_NUM, -1.0),
         ([("indent_cols", 2.0)], 0.0, Z_IS_INDENTED, 1.0),
         ([("indent_cols", 2.0)], -1.0, Z_IS_INDENTED, -1.0),
+        (container_hdr_terms, 0.0, Z_CONTAINER_HDR, 1.0),
+        (container_hdr_terms, -1.0, Z_CONTAINER_HDR, -1.0),
     ]
 
     sig_open_pats = ("function ", "def ", "=>", "func_call", "): ", ") ->")
@@ -959,17 +1128,14 @@ def _build_block1(
         "return ''", "return null", "return None",
     )
     env_lookup_pats = ("process.env", ".meta.env", "os.getenv(", "os.environ")
-    dev_default_pats = (
-        "localhost", "127.0.0.1", "0.0.0.0",
-        "sqlite://", "dev-secret", "changeme",
-    )
+    dev_default_pats = ("secret-key", "password123", "dev-secret", "changeme")
     env_veto_pats = (
         "if", "elif", "else if", "while",
         "throw", "raise", "ERR_", "assert(", "assert ",
     )
     elision_pats = (
-        "c:rest of ", "c:existing ", "c:placeholder",
-        "c:unchanged", "c:// ...", "c:# ...",
+        "c:rest of ", "c:existing cod", "c:placeholder",
+        "c:remain uncha", "c:// ...", "c:# ...",
     )
     comm_code_pats = (
         "comm_semi", "c:===", "c:=>", "c:){",
@@ -1067,14 +1233,19 @@ def _build_block1(
         scaled_cache[cache_key] = out_idx
         return out_idx
 
-    num_u = n_csum + n_conv3 + n_conv7 + n_conv13
-    n_lm1 = 124
+    num_u = num_raw_u + N_ML_GATE + N_PAREN_SUF
+    n_lm1 = 148
     lm1_w = np.zeros((num_u, n_lm1), dtype=np.int8)
     lm1_s = np.ones((n_lm1,), dtype=np.float32)
     lm1_b = np.zeros((n_lm1,), dtype=np.float32)
     lm2_w = np.zeros((n_lm1, N_LMLP2), dtype=np.int8)
     lm2_b = np.zeros((N_LMLP2,), dtype=np.float32)
 
+    ml_protected = {
+        feat["triple_dq"], feat["triple_sq"],
+        feat["ml_bcomm_open"], feat["ml_bcomm_close"],
+        feat["code_lparen"], feat["code_rparen"],
+    }
     ref_counts: Counter[int] = Counter()
     for terms, _, _, _ in line_rules:
         for name, _ in terms:
@@ -1101,6 +1272,7 @@ def _build_block1(
                 ref_counts[base_idx] == 1
                 and base_idx >= off_c3
                 and base_idx not in rescaled_once
+                and base_idx not in ml_protected
             )
             if abs(mult - 1.0) < 1e-6:
                 src_col = base_idx
@@ -1112,17 +1284,51 @@ def _build_block1(
                 src_col = clone_scaled_feat(base_idx, mult)
             lm1_w[src_col, unit] = sign_in
 
-    # Emit helper scaled Z[87..110] registers for exact {-1, 0, +1} cmlp1_w & doc1_w
-    active_units = list(range(len(line_rules)))
-    next_unit = len(line_rules)
+    # Wire cross-line docstring/comment sawtooth -> Z_IN_DOC and Dyck suffixes -> Z_IN_PAREN
+    dq_trits = np.array([1] + [-1, 1] * (N_DQ_SAW // 2 - 1) + [-1], dtype=np.int8)
+    sq_trits = np.array([1] + [-1, 1] * (N_SQ_SAW // 2 - 1) + [-1], dtype=np.int8)
+    off_dq = num_raw_u
+    off_sq = off_dq + N_DQ_SAW
+    off_bc = off_sq + N_SQ_SAW
+    off_ps = num_raw_u + N_ML_GATE
+
+    u_doc_hi, u_doc_lo = len(line_rules), len(line_rules) + 1
+    for u_doc in (u_doc_hi, u_doc_lo):
+        lm1_w[off_dq : off_dq + N_DQ_SAW, u_doc] = dq_trits
+        lm1_w[off_sq : off_sq + N_SQ_SAW, u_doc] = sq_trits
+        lm1_w[[off_bc, off_bc + 1], u_doc] = [1, -1]
+        lm1_w[[feat["lead_tdq"], feat["lead_tsq"]], u_doc] = 1
+    lm1_b[[u_doc_hi, u_doc_lo]] = [0.0, -1.0]
+    lm2_w[[u_doc_hi, u_doc_lo], Z_IN_DOC] = [1, -1]
+
+    u_par_hi, u_par_lo = len(line_rules) + 2, len(line_rules) + 3
+    par_signs = np.tile(np.array([1, -1], dtype=np.int8), N_PAREN_STEPS)
+    for u_par in (u_par_hi, u_par_lo):
+        lm1_w[off_ps : off_ps + N_PAREN_SUF, u_par] = par_signs
+    lm1_b[[u_par_hi, u_par_lo]] = [0.0, -1.0]
+    lm2_w[[u_par_hi, u_par_lo], Z_IN_PAREN] = [1, -1]
+
+    # Indented function/method signatures also indicate class/module-indented containers
+    u_ind_fn_hi, u_ind_fn_lo = len(line_rules) + 4, len(line_rules) + 5
+    ind_fn_cols = [feat["def "], feat["function "], feat["pub "], feat["public "], feat["indent_cols"]]
+    for u_ifn in (u_ind_fn_hi, u_ind_fn_lo):
+        lm1_w[ind_fn_cols, u_ifn] = 1
+    lm1_s[[u_ind_fn_hi, u_ind_fn_lo]] = 2.0
+    lm1_b[[u_ind_fn_hi, u_ind_fn_lo]] = [-3.5, -4.5]
+    lm2_w[[u_ind_fn_hi, u_ind_fn_lo], Z_CONTAINER_HDR] = [1, -1]
+
+    # Emit helper scaled Z[87..112] registers for exact {-1, 0, +1} cmlp1_w & doc1_w
+    active_units = list(range(len(line_rules) + 6))
+    next_unit = len(line_rules) + 6
     next_z = 87
     z_helpers: dict[str, int] = {}
     helper_specs = (
         ("has_code_08", Z_HAS_CODE, 0.8),
         ("d12_22", Z_DEPTH12, 2.2),
-        ("d10_12", Z_DEPTH10, 1.2),
+        ("d10_08", Z_DEPTH10, 0.8),
         ("open_24", Z_OPEN_NET, 2.4),
         ("pyr_22", Z_DEEP_PYRAMID, 2.2),
+        ("pyr_cls_22", Z_PYR_CLASS, 2.2),
         ("long_id_r4", Z_LONG_IDENT, 0.75 / 0.85),
         ("stdlib_r4", Z_STDLIB_IDIOM, 2.5 / 0.85),
         ("one_r5", Z_ONE_CHAR_ID, 0.55 / 0.4),
@@ -1136,12 +1342,13 @@ def _build_block1(
         ("sw_dup", Z_SWITCH_BLOCK, 1.0),
         ("imp_075", Z_IMPERATIVE_LINE, 0.75),
         ("odd_18", Z_ODD_INDENT, 1.8),
-        ("ee_06", Z_EARLY_EXIT, 0.6),
-        ("gc_07", Z_GUARD_CLAUSE, 0.7),
+        ("gc_09", Z_GUARD_CLAUSE, 0.9),
         ("ci_06", Z_CLEAN_IDIOM, 0.6),
-        ("m42_035", Z_MOD4_EQ2, 0.35),
-        ("wc_025", Z_WORD_COUNT, 0.25),
-        ("m42_doc", Z_MOD4_EQ2, 0.4 / 1.4),
+        ("m42_025", Z_MOD4_EQ2, 0.25),
+        ("wc_020", Z_WORD_COUNT, 0.20),
+        ("m42_doc", Z_MOD4_EQ2, 0.3 / 1.4),
+        ("in_doc_8", Z_IN_DOC, 8.0),
+        ("in_par_8", Z_IN_PAREN, 8.0),
     )
     for key_name, src_z, mult in helper_specs:
         dst_z = next_z
@@ -1180,7 +1387,9 @@ def _build_block2_and_heads(
     a1_wv_s = np.ones((96,), dtype=np.float32)
     a1_wo = np.zeros((96, N_Z), dtype=np.int8)
     a1_br = np.full((8, num_rel), -1e4, dtype=np.float32)
-    a1_bs = np.array([4.5, 1.2, 1.5, 2.5, 9.05, 11.1, -12.0, -12.0], dtype=np.float32)
+    a1_bs = np.array(
+        [4.5, 1.2, 1.5, 2.5, 9.05, 11.1, math.log(16.0), -12.0], dtype=np.float32
+    )
 
     # Head 0: uniform-diagonal Paley Hadamard projection for comment-to-code overlap
     h0_trits = _paley_uniform_proj()
@@ -1194,14 +1403,14 @@ def _build_block2_and_heads(
     a1_br[0, [center + 1, center + 2]] = [0.0, -1.2]
     a1_wv[Z_HAS_CODE, 0] = a1_wo[0, Z_RESTATES_CODE] = 1
 
-    # Head 1: try/catch/except opener matching real vs. empty/fallback handler on L..L+3
+    # Head 1: try/catch/except opener matching real vs. empty/fallback handler on L..L+6
     h1_qk = [16, 17]
     a1_wq[Z_TRY_CATCH, h1_qk] = 1
     a1_wk[[Z_REAL_HANDLER, Z_EMPTY_HANDLER], h1_qk] = 1
     a1_wq_s[h1_qk] = a1_wk_s[h1_qk] = [float(np.sqrt(32.0)), float(np.sqrt(16.0))]
-    a1_br[1, center : center + 4] = 0.0
+    a1_br[1, center : center + 7] = 0.0
 
-    # Head 2 (L-8..L), Head 3 (L-9..L+9), Head 6 (file-wide), and Head 7 (L-3..L+3)
+    # Head 2 (L-8..L), Head 3 (L-9..L+9), Head 6 (file-wide with sink prior), Head 7 (L-3..L+3)
     a1_br[2, center - 8 : center + 1] = 0.0
     a1_br[3, center - 9 : center + 10] = 0.0
     a1_br[6, :] = 0.0
@@ -1209,15 +1418,16 @@ def _build_block2_and_heads(
 
     h2_srcs = [
         Z_DEPTH10, Z_DEPTH12, Z_BRANCH_OPEN, Z_EARLY_EXIT,
-        Z_GUARD_CLAUSE, Z_CLEAN_IDIOM, Z_DEEP_PYRAMID,
+        Z_GUARD_CLAUSE, Z_CLEAN_IDIOM, Z_DEEP_PYRAMID, Z_PYR_CLASS,
     ]
-    h2_slots = list(range(24, 31))
+    h2_slots = list(range(24, 32))
     a1_wv[h2_srcs, h2_slots] = 1
-    a1_wv_s[slice(24, 31)] = [0.8, 1.5, 1.0, 1.0, 0.8, 0.8, 1.0]
+    a1_wv_s[slice(24, 32)] = [0.8, 1.5, 1.0, 1.0, 0.8, 0.8, 1.0, 1.0]
     a1_wo[[24, 25], Z_ENCLOSING_DEPTH] = 1
     a1_wo[26, Z_ENCLOSING_BRANCHES] = 1
     a1_wo[[27, 28, 29], Z_ENCLOSING_GUARDS] = 1
     a1_wo[30, Z_ENCLOSING_DEEP16] = 1
+    a1_wo[31, Z_ENCLOSING_DEEP24] = 1
 
     spec_slots = [39, 40]
     a1_wv[[Z_HARDCODED_CASE, Z_SWITCH_BLOCK], spec_slots] = 1
@@ -1256,7 +1466,7 @@ def _build_block2_and_heads(
     a1_wv_s[[12, 13]] *= [4.0 / 1.8, 1.4 / 1.8]
     a1_wv_s[26] *= 5.2 / 0.5
     a1_wv_s[[27, 28, 29]] *= 3.0 / 0.5
-    a1_wv_s[30] *= 1.6 / 0.5
+    a1_wv_s[[30, 31]] *= 1.6 / 0.5
     a1_wv_s[[36, 37]] *= [14.2, 18.0]
     a1_wv_s[spec_slots] *= 8.5 / 1.5
     a1_wv_s[[72, 73]] *= [1.5 / 0.4, 2.0 / 0.4]
@@ -1265,10 +1475,10 @@ def _build_block2_and_heads(
     a1_wv_s[86] *= 1.8 / 0.6
     a1_wv_s[87] *= 2.2 / 0.9
 
-    extra_f_slots = [77, 78, 79]
-    a1_wv[[Z_MOD4_EQ2, Z_ODD_INDENT, Z_ODD_INDENT], extra_f_slots] = 1
-    a1_wv_s[extra_f_slots] = [1.0, 1.0, 7.5]
-    a1_wo[extra_f_slots, [Z_FMOD42_DUP, Z_FODD_DUP, Z_FODD_SCALED]] = 1
+    extra_f_slots = [77, 78, 79, 80]
+    a1_wv[[Z_MOD4_EQ2, Z_ODD_INDENT, Z_ODD_INDENT, Z_CONTAINER_HDR], extra_f_slots] = 1
+    a1_wv_s[extra_f_slots] = [1.0, 1.0, 7.5, 48.0]
+    a1_wo[extra_f_slots, [Z_FMOD42_DUP, Z_FODD_DUP, Z_FODD_SCALED, Z_FILE_CONTAINERS]] = 1
 
     fence_slot = 41
     a1_wv[Z_COMM_FENCE, fence_slot] = 1
@@ -1282,78 +1492,90 @@ def _build_block2_and_heads(
     vecs_1d["attn1_brel"], vecs_1d["attn1_bsink"] = a1_br, a1_bs
 
     # Context MLP 1: paired {-1, 0, +1} ReLU clamps writing [0, 1] issue flags
-    cm1_w = np.zeros((N_Z, 96), dtype=np.int8)
-    cm1_s = np.ones((96,), dtype=np.float32)
-    cm1_b = np.zeros((96,), dtype=np.float32)
-    cm1_2w = np.zeros((96, N_Z), dtype=np.int8)
+    n_cm1 = 68
+    cm1_w = np.zeros((N_Z, n_cm1), dtype=np.int8)
+    cm1_s = np.ones((n_cm1,), dtype=np.float32)
+    cm1_b = np.zeros((n_cm1,), dtype=np.float32)
+    cm1_2w = np.zeros((n_cm1, N_Z), dtype=np.int8)
     cm1_2b = np.zeros((N_Z,), dtype=np.float32)
 
     wide_dsts = [Z_USES_WIDE_INDENT, Z_WIDE_DUP_A, Z_WIDE_DUP_B]
+    doc_veto = (zh["in_doc_8"], -1)
+    par_veto = (zh["in_par_8"], -1)
+
     ctx1_rules: list[tuple[list[tuple[int, int]], float, list[int], float, float]] = [
-        ([(zh["has_code_08"], 1), (zh["d12_22"], 1), (zh["d10_12"], 1), (Z_ENCLOSING_BRANCHES, 1),
-          (Z_ELSE_BRANCH, 1), (Z_ENCLOSING_GUARDS, -1), (zh["open_24"], -1)],
-         -2.65, [Z_RAW_NESTING_2SP], 0.5, 2.5),
+        ([(zh["has_code_08"], 1), (zh["d12_22"], 1), (zh["d10_08"], 1), (Z_ENCLOSING_BRANCHES, 1),
+          (Z_ELSE_BRANCH, 1), (Z_ENCLOSING_GUARDS, -1), (zh["open_24"], -1), doc_veto, par_veto],
+         -3.05, [Z_RAW_NESTING_2SP], 0.5, 2.5),
         ([(zh["has_code_08"], 1), (zh["pyr_22"], 1), (Z_ENCLOSING_DEEP16, 1),
           (Z_ENCLOSING_BRANCHES, 1), (Z_ELSE_BRANCH, 1),
-          (Z_ENCLOSING_GUARDS, -1), (zh["open_24"], -1)],
+          (Z_ENCLOSING_GUARDS, -1), (zh["open_24"], -1), doc_veto, par_veto],
+         -3.25, [Z_RAW_NEST_TOP], 0.5, 2.5),
+        ([(zh["has_code_08"], 1), (zh["pyr_cls_22"], 1), (Z_ENCLOSING_DEEP24, 1),
+          (Z_ENCLOSING_BRANCHES, 1), (Z_ELSE_BRANCH, 1),
+          (Z_ENCLOSING_GUARDS, -1), (zh["open_24"], -1), doc_veto, par_veto],
          -3.25, [Z_ISS_NESTING], 0.5, 2.5),
+        ([(Z_FILE_CONTAINERS, 1)], -0.4, [Z_HAS_CONTAINER], 4.0, 2.0),
+
         ([(Z_FILE_MOD4_0, 1), (Z_FILE_MOD4_2, -1), (Z_FMOD42_DUP, -1),
           (Z_FILE_ODD_IND, -1), (Z_FODD_DUP, -1)],
-         -0.5, wide_dsts, 20.0, 2.0),
-        ([(Z_FILE_ODD_IND, 1), (Z_FILE_MOD4_2, -1)], -4.0, wide_dsts, 20.0, 2.0),
+         -0.25, wide_dsts, 20.0, 2.0),
+        ([(Z_FILE_ODD_IND, 1), (Z_FILE_MOD4_2, -1)], -2.5, wide_dsts, 20.0, 2.0),
 
-        ([(Z_CEREMONY, 1), (zh["long_id_r4"], 1), (Z_LOCAL_CEREMONY, 1), (zh["stdlib_r4"], -1)],
+        ([(Z_CEREMONY, 1), (zh["long_id_r4"], 1), (Z_LOCAL_CEREMONY, 1),
+          (zh["stdlib_r4"], -1), doc_veto],
          -1.05, [Z_ISS_NAMING], 0.85, 2.2),
         ([(zh["one_r5"], 1), (Z_FILE_ONE_CHAR, 1), (Z_FILE_WORDS, -1),
-          (zh["words_r5"], -1), (Z_HAS_CODE, 1)],
-         -1.45, [Z_RAW_CRYPTIC], 0.4, 2.2),
-        ([(Z_PURE_COMMENT, 1), (Z_SHORT_COMMENT, 1), (Z_RESTATES_CODE, 1)],
+          (zh["words_r5"], -1), (Z_CRYPTIC_GATE, 1), doc_veto],
+         -2.15, [Z_RAW_CRYPTIC], 0.4, 2.2),
+        ([(Z_PURE_COMMENT, 1), (Z_SHORT_COMMENT, 1), (Z_RESTATES_CODE, 1), doc_veto],
          -3.35, [Z_ISS_COMMENT], 1.0, 2.5),
-        ([(Z_NARRATOR_TAG, 1)], -0.45, [Z_ISS_COMMENT], 1.5, 2.2),
-        ([(Z_TRY_CATCH, 1), (Z_NEAR_EMPTY_HANDLER, 1), (Z_NEAR_REAL_HANDLER, -1)],
+        ([(Z_NARRATOR_TAG, 1), doc_veto], -0.45, [Z_ISS_COMMENT], 1.5, 2.2),
+        ([(Z_TRY_CATCH, 1), (Z_NEAR_EMPTY_HANDLER, 1), (Z_NEAR_REAL_HANDLER, -1), doc_veto],
          -2.1, [Z_ISS_ERROR], 1.8, 2.5),
-        ([(Z_FALLBACK_SWALLOW, 1)], -0.35, [Z_ISS_ERROR], 1.4, 2.2),
+        ([(Z_FALLBACK_SWALLOW, 1), doc_veto], -0.35, [Z_ISS_ERROR], 1.4, 2.2),
 
         ([(zh["chain_12"], 1), (zh["tern_125"], 1), (zh["o96_11"], 1), (zh["o80_025"], 1),
-          (zh["stdlib_09"], -1), (zh["modhdr_30"], -1)],
+          (zh["stdlib_09"], -1), (zh["modhdr_30"], -1), doc_veto],
          -1.0, [Z_ISS_DENSE], 1.0, 2.2),
         ([(Z_HARDCODED_CASE, 1), (Z_LOCAL_SPECIAL_CASES, 1),
-          (Z_SWITCH_BLOCK, -1), (zh["sw_dup"], -1)],
+          (Z_SWITCH_BLOCK, -1), (zh["sw_dup"], -1), doc_veto],
          -2.75, [Z_ISS_SPECIAL], 1.5, 2.5),
-        ([(zh["imp_075"], 1), (Z_DISTANT_CLONE, 1), (Z_IS_INDENTED, 1), (Z_IS_STMT, 1)],
+        ([(zh["imp_075"], 1), (Z_DISTANT_CLONE, 1), (Z_IS_INDENTED, 1),
+          (Z_IS_STMT, 1), doc_veto, par_veto],
          -6.45, [Z_RAW_CLONE], 2.0, 2.5),
-        ([(Z_IS_STMT, 1), (Z_LOCAL_STMT_DENSITY, 1), (Z_LOCAL_BREAK_DENSITY, -1)],
-         -8.55, [Z_ISS_LAYOUT], 1.0, 3.0),
-        ([(Z_IS_STMT, 1), (zh["odd_18"], 1), (Z_FODD_SCALED, -1)],
+        ([(Z_IS_STMT, 1), (Z_LOCAL_STMT_DENSITY, 1), (Z_LOCAL_BREAK_DENSITY, -1),
+          doc_veto, par_veto],
+         -9.15, [Z_ISS_LAYOUT], 1.0, 3.0),
+        ([(Z_IS_STMT, 1), (zh["odd_18"], 1), (Z_FODD_SCALED, -1), doc_veto, par_veto],
          -2.0, [Z_ISS_LAYOUT], 1.0, 2.5),
-        ([(zh["ee_06"], 1), (zh["gc_07"], 1), (zh["ci_06"], 1),
-          (zh["m42_035"], 1), (zh["wc_025"], 1)],
+        ([(zh["gc_09"], 1), (zh["ci_06"], 1), (zh["m42_025"], 1), (zh["wc_020"], 1), doc_veto],
          -0.25, [Z_CLEAN_BONUS], 1.0, 1.2),
-        ([(Z_SHORT_GOLF, 1), (Z_LOCAL_SHORT_GOLF, 1)], -1.35, [Z_ISS_NAMING], 0.6, 2.5),
-        ([(Z_MAGIC_NUM, 1), (Z_LOCAL_MAGIC_NUM, 1)], -0.78, [Z_ISS_NAMING], 0.9, 2.5),
+        ([(Z_SHORT_GOLF, 1), (Z_LOCAL_SHORT_GOLF, 1), doc_veto], -1.35, [Z_ISS_NAMING], 0.6, 2.5),
+        ([(Z_MAGIC_NUM, 1), (Z_LOCAL_MAGIC_NUM, 1), doc_veto], -0.78, [Z_ISS_NAMING], 0.9, 2.5),
 
-        ([(Z_SIG_OPEN, 1), (Z_STATIC_TYPE, 1), (Z_SIG_VETO, -1), (Z_SEMI_ONLY, -1)],
+        ([(Z_SIG_OPEN, 1), (Z_STATIC_TYPE, 1), (Z_SIG_VETO, -1), (Z_SEMI_ONLY, -1), doc_veto],
          -1.5, [Z_TYPED_INTERNAL_SIG], 1.0, 4.0),
-        ([(Z_SIG_VETO, 1), (Z_SEMI_ONLY, -1)],
+        ([(Z_SIG_VETO, 1), (Z_SEMI_ONLY, -1), doc_veto],
          -0.5, [Z_BOUNDARY_SIG_LINE], 1.0, 4.0),
-        ([(Z_IF_LINE, 1), (Z_TYPE_HEDGE, 1), (Z_FAIL_FAST, -1)],
+        ([(Z_IF_LINE, 1), (Z_TYPE_HEDGE, 1), (Z_FAIL_FAST, -1), doc_veto],
          -1.5, [Z_TYPE_HEDGE_IF], 1.0, 4.0),
-        ([(Z_TWO_ENVS, 1), (Z_HAS_COALESCE, 1), (Z_ENV_VETO, -1)],
+        ([(Z_TWO_ENVS, 1), (Z_HAS_COALESCE, 1), (Z_ENV_VETO, -1), doc_veto],
          -1.5, [Z_ENV_CHAIN_1L], 1.0, 4.0),
-        ([(Z_HAS_ENV, 1), (Z_DEV_DEFAULT, 1), (Z_ENV_VETO, -1)],
+        ([(Z_HAS_ENV, 1), (Z_DEV_DEFAULT, 1), (Z_ENV_VETO, -1), doc_veto],
          -1.5, [Z_ENV_DEV_1L], 1.0, 4.0),
 
-        ([(Z_HAS_ENV, 1), (Z_HAS_ASSIGN, -1), (Z_ENV_VETO, -1)],
+        ([(Z_HAS_ENV, 1), (Z_HAS_ASSIGN, -1), (Z_ENV_VETO, -1), doc_veto],
          -0.5, [Z_CONT_ENV], 1.0, 4.0),
-        ([(Z_DEV_DEFAULT, 1), (Z_HAS_ASSIGN, -1), (Z_FAIL_FAST, -1)],
+        ([(Z_DEV_DEFAULT, 1), (Z_HAS_ASSIGN, -1), (Z_FAIL_FAST, -1), doc_veto],
          -0.5, [Z_CONT_DEV_DEF], 1.0, 4.0),
-        ([(Z_ELISION_RAW, 1), (Z_LINE_COMM_VETO, -1)],
+        ([(Z_ELISION_RAW, 1), (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1), doc_veto],
          -0.5, [Z_ISS_COMMENT], 1.0, 4.0),
         ([(Z_PURE_COMMENT, 1), (Z_COMM_STRONG_CUE, 1),
-          (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1)],
+          (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1), doc_veto],
          -1.5, [Z_COMM_CODE_LINE], 1.0, 4.0),
         ([(Z_PURE_COMMENT, 1), (Z_COMM_ASSIGN, 1), (Z_COMM_FCALL, 1),
-          (Z_COMM_STRONG_CUE, -1), (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1)],
+          (Z_COMM_STRONG_CUE, -1), (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1), doc_veto],
          -2.5, [Z_COMM_CODE_LINE], 1.0, 4.0),
     ]
 
@@ -1400,6 +1622,12 @@ def _build_block2_and_heads(
     a2_wo[smooth_slots, smooth_dsts] = 1
     a2_wv_s[smooth_slots] = [5.0 / 2.0, 1.2 / 4.2, 1.2 / 4.3, 3.0 / 1.6, 1.0 / 4.3, 1.0]
 
+    # Top-level (non-class) nesting smoothing in slot 49 -> Z_ENCLOSING_DEPTH (reused post-ctx1)
+    Z_SMOOTH_NEST_TOP = Z_ENCLOSING_DEPTH
+    a2_wv[Z_RAW_NEST_TOP, 49] = 1
+    a2_wv_s[49] = 1.0
+    a2_wo[49, Z_SMOOTH_NEST_TOP] = 1
+
     h4_slot = 64
     a2_wv[Z_COMM_CODE_LINE, h4_slot] = 1
     a2_wo[h4_slot, Z_SMOOTH_COMM_CODE] = 1
@@ -1443,51 +1671,70 @@ def _build_block2_and_heads(
 
     for pair_u in (0, 1):
         cm2_w[[Z_RAW_CLONE, Z_SMOOTH_CLONE], pair_u] = 1
+        cm2_w[[Z_IN_DOC, Z_IN_PAREN], pair_u] = -1
     for pair_u in (2, 3):
-        cm2_w[[Z_RAW_CRYPTIC, Z_SMOOTH_CRYPTIC], pair_u] = 1
+        cm2_w[[Z_RAW_CRYPTIC, Z_SMOOTH_CRYPTIC, Z_CRYPTIC_GATE], pair_u] = 1
+        cm2_w[Z_IN_DOC, pair_u] = -1
     cm2_s[:4] = [2.0, 2.0, 1.6, 1.6]
-    cm2_b[:4] = [-3.35, -4.35, -2.0, -3.0]
+    cm2_b[:4] = [-3.35, -4.35, -3.6, -4.6]
     cm2_2w[[0, 1], Z_ISS_CLONE] = [1, -1]
     cm2_2w[[2, 3], Z_ISS_NAMING] = [1, -1]
 
     cm2_w[Z_RAW_NESTING_2SP, [4, 5]] = 1
     cm2_w[Z_SMOOTH_NEST_2SP, [6, 7]] = 1
     for wide_u in range(4, 8):
-        cm2_w[wide_dsts, wide_u] = -1
+        cm2_w[[*wide_dsts, Z_IN_DOC, Z_IN_PAREN], wide_u] = -1
     nest_sm_ratio = 1.2 / 4.2
     cm2_s[[6, 7]] = nest_sm_ratio
     cm2_b[4:8] = [0.0, -1.0, 0.0, -nest_sm_ratio]
     cm2_2w[[4, 5], Z_ISS_NESTING] = [1, -1]
     cm2_2w[[6, 7], Z_SMOOTH_NEST] = [1, -1]
 
+    # Add top-level 4-space nesting only when file does NOT use class/impl containers
+    cm2_w[Z_RAW_NEST_TOP, [8, 9]] = 1
+    cm2_w[Z_SMOOTH_NEST_TOP, [10, 11]] = 1
+    for top_u in range(8, 12):
+        cm2_w[[Z_HAS_CONTAINER, Z_ISS_NESTING, Z_IN_DOC, Z_IN_PAREN, Z_SHALLOW_LINE], top_u] = -1
+    cm2_s[[10, 11]] = nest_sm_ratio
+    cm2_b[8:12] = [0.0, -1.0, 0.0, -nest_sm_ratio]
+    cm2_2w[[8, 9], Z_ISS_NESTING] = [1, -1]
+    cm2_2w[[10, 11], Z_SMOOTH_NEST] = [1, -1]
+
+    # Cancel Z_SMOOTH_NEST smearing onto shallow / docstring / paren-continuation lines
+    for cancel_u in (12, 13):
+        cm2_w[[Z_SMOOTH_NEST, Z_SHALLOW_LINE, Z_IN_DOC, Z_IN_PAREN], cancel_u] = 1
+    cm2_s[[12, 13]] = 1.0
+    cm2_b[[12, 13]] = [-1.0, -2.0]
+    cm2_2w[[12, 13], Z_SMOOTH_NEST] = [-1, 1]
+
     paranoid_dsts = [
         (Z_ISS_ERROR, 1), (Z_CLEAN_BONUS, -1),
         (Z_GUARD_CLAUSE, -1), (Z_EARLY_EXIT, -1),
     ]
     ctx2_rules: list[tuple[list[tuple[int, int]], float, list[tuple[int, int]], float]] = [
-        ([(Z_COMM_CODE_LINE, 1), (Z_SMOOTH_COMM_CODE, 1)],
+        ([(Z_COMM_CODE_LINE, 1), (Z_SMOOTH_COMM_CODE, 1), (Z_IN_DOC, -1)],
          -1.293, [(Z_ISS_COMMENT, 1)], 150.0),
-        ([(Z_TYPE_HEDGE_IF, 1), (Z_HAS_RECENT_TYPED_SIG, 1), (Z_NEAR_NEUTRAL_RET, 1)],
+        ([(Z_TYPE_HEDGE_IF, 1), (Z_HAS_RECENT_TYPED_SIG, 1), (Z_NEAR_NEUTRAL_RET, 1), (Z_IN_DOC, -1)],
          -2.5, paranoid_dsts, 4.0),
-        ([(Z_ENV_CHAIN_1L, 1), (Z_NEXT_FAIL_FAST, -1)],
+        ([(Z_ENV_CHAIN_1L, 1), (Z_NEXT_FAIL_FAST, -1), (Z_IN_DOC, -1)],
          -0.5, [(Z_ISS_ERROR, 1)], 4.0),
-        ([(Z_ENV_DEV_1L, 1), (Z_ENV_CHAIN_1L, -1), (Z_NEXT_FAIL_FAST, -1)],
+        ([(Z_ENV_DEV_1L, 1), (Z_ENV_CHAIN_1L, -1), (Z_NEXT_FAIL_FAST, -1), (Z_IN_DOC, -1)],
          -0.5, [(Z_ISS_ERROR, 1)], 4.0),
 
         ([(Z_HAS_ENV, 1), (Z_NEXT_CONT_DEV, 1), (Z_ENV_VETO, -1),
-          (Z_SEMI_ONLY, -1), (Z_ENV_CHAIN_1L, -1), (Z_ENV_DEV_1L, -1)],
+          (Z_SEMI_ONLY, -1), (Z_ENV_CHAIN_1L, -1), (Z_ENV_DEV_1L, -1), (Z_IN_DOC, -1)],
          -1.5, [(Z_ISS_ERROR, 1)], 4.0),
         ([(Z_HAS_ENV, 1), (Z_NEXT_CONT_ENV, 1), (Z_NEXT_COAL, 1),
           (Z_ENV_VETO, -1), (Z_SEMI_ONLY, -1), (Z_NEXT_FAIL_FAST, -1),
-          (Z_ENV_CHAIN_1L, -1), (Z_ENV_DEV_1L, -1), (Z_NEXT_CONT_DEV, -1)],
+          (Z_ENV_CHAIN_1L, -1), (Z_ENV_DEV_1L, -1), (Z_NEXT_CONT_DEV, -1), (Z_IN_DOC, -1)],
          -2.5, [(Z_ISS_ERROR, 1)], 4.0),
         ([(Z_HAS_ENV, 1), (Z_NEXT_CONT_ENV, 1), (Z_HAS_COALESCE, 1), (Z_NEXT_COAL, -1),
           (Z_ENV_VETO, -1), (Z_SEMI_ONLY, -1), (Z_NEXT_FAIL_FAST, -1),
-          (Z_ENV_CHAIN_1L, -1), (Z_ENV_DEV_1L, -1), (Z_NEXT_CONT_DEV, -1)],
+          (Z_ENV_CHAIN_1L, -1), (Z_ENV_DEV_1L, -1), (Z_NEXT_CONT_DEV, -1), (Z_IN_DOC, -1)],
          -2.5, [(Z_ISS_ERROR, 1)], 4.0),
     ]
     for idx, (terms, bias, dst_signs, gain) in enumerate(ctx2_rules):
-        unit = 8 + 2 * idx
+        unit = 14 + 2 * idx
         for src_z, trit in terms:
             cm2_w[src_z, [unit, unit + 1]] = trit
         cm2_s[[unit, unit + 1]] = gain
@@ -1511,7 +1758,7 @@ def _build_block2_and_heads(
     trit_mats["sq_w"], vecs_1d["sq_s"], vecs_1d["sq_b"] = sq_w, sq_s, sq_b
 
     pool_gate_w = np.zeros((N_Z, 1), dtype=np.int8)
-    pool_gate_w[Z_ACTIVE, 0] = 1
+    pool_gate_w[[Z_ACTIVE, Z_IN_DOC], 0] = [1, -1]
     trit_mats["pool_gate_w"] = pool_gate_w
     vecs_1d["pool_gate_s"] = np.array([12.0], dtype=np.float32)
     vecs_1d["pool_gate_b"] = np.array([-6.0], dtype=np.float32)
@@ -1521,7 +1768,7 @@ def _build_block2_and_heads(
     doc2_b = np.zeros((31,), dtype=np.float32)
     doc2_b[:2] = [1.45, 1.85]
     target_doc2[:8, 0] = [-2.1, -2.1, -1.9, -2.2, -2.2, -2.2, -2.1, -2.0]
-    target_doc2[:8, 1] = [-1.2, -1.0, -2.2, -2.5, -1.1, -2.6, -2.3, -1.3]
+    target_doc2[:8, 1] = [-1.4, -1.2, -2.2, -2.5, -1.2, -2.6, -2.3, -1.4]
     target_doc2[8, :2] = [0.85, 0.45]
 
     subscore_heads = (
@@ -1560,12 +1807,12 @@ def _build_block2_and_heads(
         max_slot = mean_slot + 3
         for trit_i, pow3 in enumerate((1.0, 3.0, 9.0)):
             doc1_w[reg, mean_slot + trit_i] = 1
-            doc1_s[mean_slot + trit_i] = 4.5 * step_issue * pow3
-            doc1_b[mean_slot + trit_i] = -0.03 * step_issue * pow3
+            doc1_s[mean_slot + trit_i] = 2.8 * step_issue * pow3
+            doc1_b[mean_slot + trit_i] = 0.0
 
             doc1_w[N_Z + reg, max_slot + trit_i] = 1
-            doc1_s[max_slot + trit_i] = 0.65 * step_issue * pow3
-            doc1_b[max_slot + trit_i] = -0.17 * step_issue * pow3
+            doc1_s[max_slot + trit_i] = 9.8 * step_issue * pow3
+            doc1_b[max_slot + trit_i] = -0.044 * 9.8 * step_issue * pow3
 
         for col_j in range(31):
             w_val = float(target_doc2[head_i, col_j])

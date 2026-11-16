@@ -1,0 +1,213 @@
+{
+  "messy_cases": [
+    {
+      "id": "deep_nesting_top_py",
+      "expected_kind": "deep_nesting",
+      "code": "def process_items(records, config):\n    if records:\n        for item in records:\n            if item.active:\n                if config.strict:\n                    if item.amount > 0:\n                        return item.amount\n    return 0\n"
+    },
+    {
+      "id": "deep_nesting_class_rs",
+      "expected_kind": "deep_nesting",
+      "code": "impl OrderBook {\n    pub fn scan(&mut self, levels: &[Level]) -> usize {\n        for level in levels {\n            if level.active {\n                for entry in &level.orders {\n                    if entry.remaining > 0 {\n                        if entry.owner != 0 {\n                            return entry.remaining;\n                        }\n                    }\n                }\n            }\n        }\n        0\n    }\n}\n"
+    },
+    {
+      "id": "ceremony_naming_ts",
+      "expected_kind": "poor_naming",
+      "code": "export class AbstractInvoiceStrategyFactoryManager {\n  public executeInvoiceCalculationService(amount: number): number {\n    return amount * 2;\n  }\n}\n"
+    },
+    {
+      "id": "graveyard_suffix_py",
+      "expected_kind": "poor_naming",
+      "code": "def compute_totals_deprecated(items):\n    subtotal_old = sum(items)\n    tax_backup = subtotal_old * 0.08\n    return subtotal_old + tax_backup\n"
+    },
+    {
+      "id": "variable_golf_js",
+      "expected_kind": "poor_naming",
+      "code": "export function decode(tb, vb) {\n  let sp = tb[12] ^ tb[28];\n  let ft = tb[14] ^ tb[30];\n  let bo = tb[18] ^ tb[34];\n  let vo = vb[22] ^ vb[38];\n  return sp + ft + bo + vo;\n}\n"
+    },
+    {
+      "id": "cryptic_single_char_py",
+      "expected_kind": "poor_naming",
+      "code": "def f(a, b, c, d):\n    x = a * b + c * d\n    y = a * c - b * d\n    z = x * y + a - b\n    w = z - x + y * c\n    return w\n"
+    },
+    {
+      "id": "restating_comment_py",
+      "expected_kind": "noisy_comment",
+      "code": "def normalize_customer_email(customer_record):\n    # Normalize customer email from customer record\n    customer_email = customer_record.email.strip().lower()\n    return customer_email\n"
+    },
+    {
+      "id": "step_narration_ts",
+      "expected_kind": "noisy_comment",
+      "code": "export function totalCart(prices: number[]): number {\n  // Step 1: initialize running sum\n  let sum = 0;\n  for (const price of prices) {\n    sum += price;\n  }\n  return sum;\n}\n"
+    },
+    {
+      "id": "elision_placeholder_js",
+      "expected_kind": "noisy_comment",
+      "code": "export function syncAccount(user) {\n  const id = user.id;\n  // ... rest of implementation\n  return id;\n}\n"
+    },
+    {
+      "id": "commented_out_code_py",
+      "expected_kind": "noisy_comment",
+      "code": "def active_users(users):\n    # def old_filter(items):\n    #     if items is None:\n    #         return []\n    return [user for user in users if user.active]\n"
+    },
+    {
+      "id": "swallowed_except_pass_py",
+      "expected_kind": "swallowed_error",
+      "code": "def load_profile(path):\n    try:\n        return read_json(path)\n    except Exception:\n        pass\n"
+    },
+    {
+      "id": "swallowed_except_ellipsis_py",
+      "expected_kind": "swallowed_error",
+      "code": "def load_profile(path):\n    try:\n        return read_json(path)\n    except Exception:\n        ...\n"
+    },
+    {
+      "id": "hardcoded_dev_secret_py",
+      "expected_kind": "swallowed_error",
+      "code": "SIGNING_KEY = os.environ.get(\"SIGNING_KEY\", \"dev-secret\")\n"
+    },
+    {
+      "id": "env_guessing_chain_js",
+      "expected_kind": "swallowed_error",
+      "code": "const endpoint = process.env.API_URL || process.env.BACKEND_URL || \"https://api.example.com\";\n"
+    },
+    {
+      "id": "paranoid_internal_type_guard_ts",
+      "expected_kind": "swallowed_error",
+      "code": "function sumLineItems(items: number[]): number {\n  if (!items || !Array.isArray(items)) {\n    return 0;\n  }\n  let total = 0;\n  for (const val of items) {\n    total += val;\n  }\n  return total;\n}\n"
+    },
+    {
+      "id": "dense_chained_ternary_ts",
+      "expected_kind": "dense_line",
+      "code": "export const summarize = (rows: Row[], rate: number) => rows.filter((row) => row.enabled && row.qty > 0).map((row) => row.qty * (rate > 0.5 ? 0.5 : rate > 0 ? rate : 1)).reduce((acc, v) => acc + v, 0);\n"
+    },
+    {
+      "id": "special_case_ladder_go",
+      "expected_kind": "special_casing",
+      "code": "func regionHost(region string) string {\n    if region == \"us-east-1\" { return \"east.internal\" }\n    if region == \"us-west-2\" { return \"west.internal\" }\n    if region == \"eu-west-1\" { return \"eu.internal\" }\n    if region == \"ap-south-1\" { return \"ap.internal\" }\n    return \"default.internal\"\n}\n"
+    },
+    {
+      "id": "duplicate_imperative_block_go",
+      "expected_kind": "duplicate_block",
+      "code": "func publishInvoiceEvent(httpClient *Client, region string, invoiceItem Event) {\n    targetUrl := resolveEndpoint(region)\n    bodyBytes := serializeJsonBody(invoiceItem)\n    digestHex := formatPayloadDigest(bodyBytes)\n    authToken := computeHmacSignature(digestHex, httpClient.signingSecret)\n    statusCode := transmitHttpPost(httpClient, targetUrl, bodyBytes, authToken)\n    recordTelemetryCounter(statusCode, region)\n}\n\nfunc publishRefundEvent(httpClient *Client, region string, refundItem Event) {\n    targetUrl := resolveEndpoint(region)\n    bodyBytes := serializeJsonBody(refundItem)\n    digestHex := formatPayloadDigest(bodyBytes)\n    authToken := computeHmacSignature(digestHex, httpClient.signingSecret)\n    statusCode := transmitHttpPost(httpClient, targetUrl, bodyBytes, authToken)\n    recordTelemetryCounter(statusCode, region)\n}\n"
+    }
+  ],
+  "clean_traps": [
+    {
+      "id": "early_guard_clauses_py",
+      "note": "Five early returns (clean guard style that dogmatic PLR0911 single-exit rules flag)",
+      "code": "def validate_transfer(account, recipient, amount_cents: int) -> str | None:\n    if account is None or not account.is_open:\n        return \"closed_account\"\n    if recipient is None or account.id == recipient.id:\n        return \"invalid_recipient\"\n    if amount_cents <= 0:\n        return \"non_positive_amount\"\n    if amount_cents > account.available_cents:\n        return \"insufficient_funds\"\n    return None\n"
+    },
+    {
+      "id": "no_boilerplate_docstring_py",
+      "note": "Self-explanatory domain functions without redundant PEP 257 / pylint C0116 filler",
+      "code": "def cents_to_dollars(amount_cents: int) -> float:\n    return round(amount_cents / 100.0, 2)\n\n\ndef apply_basis_points(amount_cents: int, basis_points: int) -> int:\n    return (amount_cents * basis_points) // 10_000\n"
+    },
+    {
+      "id": "matmul_ijk_py",
+      "note": "Standard 9-line matrix multiply with i/j/k loop indices and n/m/p dimensions",
+      "code": "def matmul(a, b):\n    n, m, p = len(a), len(b), len(b[0])\n    out = [[0] * p for _ in range(n)]\n    for i in range(n):\n        for j in range(p):\n            for k in range(m):\n                out[i][j] += a[i][k] * b[k][j]\n    return out\n"
+    },
+    {
+      "id": "single_line_minimal_py",
+      "note": "Minimal 1-line module assignment without short-file score collapse",
+      "code": "x = 1\n"
+    },
+    {
+      "id": "localhost_env_default_py",
+      "note": "Standard local bind host configuration default",
+      "code": "HOST = os.environ.get(\"HOST\", \"localhost\")\nPORT = int(os.environ.get(\"PORT\", \"8080\"))\n"
+    },
+    {
+      "id": "multiline_docstring_deprecated_py",
+      "note": "Multiline Python docstring containing Deprecated, Factory, and existing prose",
+      "code": "def register_handler(kind: str, callback):\n    \"\"\"\n    Deprecated: prefer the existing registry table over Factory callbacks.\n    Kept for backward compatibility with external plugins.\n    \"\"\"\n    return callback(kind)\n"
+    },
+    {
+      "id": "multiline_block_comment_c",
+      "note": "Multiline C block comment containing Factory, Manager, and existing prose",
+      "code": "/*\n * Legacy Factory Manager note: keep existing wire layout intact\n * across big-endian and little-endian targets.\n */\nint decode_version(const unsigned char *header) {\n    if (header == 0) {\n        return -1;\n    }\n    return (int)header[0];\n}\n"
+    },
+    {
+      "id": "hanging_indent_params_py",
+      "note": "PEP 8 hanging-indent parameter alignment on odd column offset",
+      "code": "class Formatter:\n    def __init__(self,\n                 prog_name,\n                 indent_step=2,\n                 max_width=80):\n        self.prog_name = prog_name\n        self.indent_step = indent_step\n        self.max_width = max_width\n"
+    },
+    {
+      "id": "class_method_3level_py",
+      "note": "Ordinary 3-level control flow (if -> for -> if) inside a class method",
+      "code": "class ActionGroup:\n    def split_actions(self, actions, include_hidden: bool):\n        visible = []\n        if actions:\n            for action in actions:\n                if include_hidden or not action.hidden:\n                    visible.append(action)\n        return visible\n"
+    },
+    {
+      "id": "hash_banner_section_py",
+      "note": "Python hash-banner section divider comment",
+      "code": "######################################################################\n# Public helpers\n######################################################################\n\ndef clamp_ratio(value: float) -> float:\n    return max(0.0, min(1.0, value))\n"
+    },
+    {
+      "id": "catch_abort_reset_js",
+      "note": "Catch block ignoring AbortError early before reporting real failures",
+      "code": "export async function fetchManifest(url, signal) {\n  try {\n    const resp = await fetch(url, { signal });\n    return await resp.json();\n  } catch (err) {\n    if (err && err.name === \"AbortError\") {\n      return null;\n    }\n    throw err;\n  }\n}\n"
+    },
+    {
+      "id": "declarative_flag_table_py",
+      "note": "Adjacent CLI argument registrations sharing 4-gram stems without clone false positive",
+      "code": "def build_parser(parser):\n    parser.add_argument(\"--host\", default=\"127.0.0.1\", help=\"Bind address\")\n    parser.add_argument(\"--port\", type=int, default=8000, help=\"Bind port\")\n    parser.add_argument(\"--workers\", type=int, default=4, help=\"Worker count\")\n    parser.add_argument(\"--timeout\", type=float, default=30.0, help=\"Read timeout\")\n    return parser\n"
+    },
+    {
+      "id": "boundary_unknown_guard_ts",
+      "note": "Exported boundary parser validating unknown input and throwing on invalid type",
+      "code": "export function parsePort(raw: unknown): number {\n  if (typeof raw !== \"number\" || !Number.isInteger(raw)) {\n    throw new TypeError(\"Expected integer port\");\n  }\n  return raw;\n}\n"
+    },
+    {
+      "id": "fail_fast_env_guard_js",
+      "note": "Fail-fast startup check across two environment variables",
+      "code": "export function requireToken(env) {\n  if (!env.PRIMARY_TOKEN && !env.FALLBACK_TOKEN) {\n    throw new Error(\"Missing authentication token\");\n  }\n  return env.PRIMARY_TOKEN || env.FALLBACK_TOKEN;\n}\n"
+    },
+    {
+      "id": "rust_match_dispatch_rs",
+      "note": "Idiomatic Rust impl + match arm with single allow attribute",
+      "code": "#[allow(dead_code)]\npub enum WireOp {\n    Ping,\n    Close(u16),\n}\n\nimpl WireOp {\n    pub fn code(&self) -> u16 {\n        match self {\n            WireOp::Ping => 1,\n            WireOp::Close(reason) => {\n                if *reason == 0 {\n                    1000\n                } else {\n                    *reason\n                }\n            }\n        }\n    }\n}\n"
+    },
+    {
+      "id": "go_err_guards_go",
+      "note": "Idiomatic Go error propagation with early returns",
+      "code": "func readHeader(src io.Reader) ([]byte, error) {\n    buf := make([]byte, 16)\n    if _, err := io.ReadFull(src, buf); err != nil {\n        return nil, fmt.Errorf(\"read header: %w\", err)\n    }\n    return buf, nil\n}\n"
+    },
+    {
+      "id": "protocol_ellipsis_stub_py",
+      "note": "Python Protocol method stub using ellipsis outside try/except",
+      "code": "class Codec(Protocol):\n    def encode(self, payload: bytes) -> bytes:\n        ...\n"
+    },
+    {
+      "id": "private_deprecated_attr_py",
+      "note": "Internal _deprecated tracking set (attribute name, not graveyard copy suffix)",
+      "code": "class Registry:\n    def __init__(self) -> None:\n        self._deprecated: set[str] = set()\n\n    def mark(self, name: str) -> None:\n        self._deprecated.add(name)\n"
+    }
+  ],
+  "stdlib_modules": [
+    "abc.py",
+    "argparse.py",
+    "ast.py",
+    "bisect.py",
+    "calendar.py",
+    "cmd.py",
+    "colorsys.py",
+    "configparser.py",
+    "contextlib.py",
+    "copy.py",
+    "csv.py",
+    "dataclasses.py",
+    "difflib.py",
+    "enum.py",
+    "fnmatch.py",
+    "fractions.py",
+    "functools.py",
+    "glob.py",
+    "graphlib.py",
+    "heapq.py",
+    "hmac.py",
+    "inspect.py",
+    "io.py",
+    "ipaddress.py",
+    "json/__init__.py"
+  ]
+}
