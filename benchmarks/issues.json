@@ -1,0 +1,234 @@
+{
+  "3": {
+    "title": "Go false positives: Service identifiers, //go:embed, doc-comment tails and empty composite literals",
+    "url": "https://github.com/brianbell-x/codehygiene/issues/3",
+    "repro": [
+      {
+        "id": "services.go",
+        "reported_lines": [
+          14,
+          18,
+          23,
+          24,
+          25,
+          26,
+          30,
+          39
+        ],
+        "code": "package shop\n\nimport (\n\t\"context\"\n\t_ \"embed\"\n\t\"strings\"\n)\n\ntype Service struct{ host string }\n\nfunc (s *Service) Stop(ctx context.Context) error { return nil }\n\ntype Smoke struct {\n\tServices     []*Service\n\tServiceHosts []string\n}\n\n//go:embed internal/fixture/main.go\nvar fixtureSource string\n\n// WithServiceBinding attaches a fixture service under hostname so the smoke\n// can reach it before the image under test starts serving requests for\n// publication.\nfunc (s Smoke) WithServiceBinding(hostname string, service *Service) Smoke {\n\ts.ServiceHosts = append(s.ServiceHosts, hostname)\n\ts.Services = append(s.Services, service)\n\treturn s\n}\n\nfunc stopService(ctx context.Context, service *Service) {\n\t_ = service.Stop(ctx)\n}\n\nfunc Catalog(\n\t// +optional\n\t// +default=\"build/ci/images/catalog.yml\"\n\tpath string,\n) string {\n\tstdout, stderr := &strings.Builder{}, &strings.Builder{}\n\tstdout.WriteString(path)\n\treturn stdout.String() + stderr.String()\n}\n"
+      },
+      {
+        "id": "names_test.go",
+        "reported_lines": [
+          5
+        ],
+        "code": "package shop\n\nimport \"testing\"\n\nfunc TestCheckoutRejectsExpiredCouponsForGuestUsers(t *testing.T) {\n\tif err := Checkout(Order{Coupon: \"OLD\"}); err == nil {\n\t\tt.Fatal(\"expected an expired coupon to be rejected\")\n\t}\n}\n"
+      },
+      {
+        "id": "limits.go",
+        "reported_lines": [
+          9
+        ],
+        "code": "package shop\n\nimport \"context\"\n\nfunc runAll(ctx context.Context, jobs []func() error, limit int) error {\n\tactive := make(chan struct{}, limit)\n\tfor _, job := range jobs {\n\t\tselect {\n\t\tcase active <- struct{}{}:\n\t\tcase <-ctx.Done():\n\t\t\treturn ctx.Err()\n\t\t}\n\t\tif err := job(); err != nil {\n\t\t\treturn err\n\t\t}\n\t\t<-active\n\t}\n\treturn nil\n}\n\nvar defaultTags = map[string][]string{\n\t\"guest\":  {},\n\t\"member\": {\"loyalty\"},\n}\n"
+      }
+    ],
+    "clean_variants": [
+      {
+        "id": "service_domain_type_go",
+        "fp_class": "service_naming",
+        "note": "Service as a domain type with constructor and receiver methods",
+        "code": "package billing\n\ntype InvoiceService struct {\n\tstore  Store\n\tmailer Mailer\n}\n\nfunc NewInvoiceService(store Store, mailer Mailer) *InvoiceService {\n\treturn &InvoiceService{store: store, mailer: mailer}\n}\n\nfunc (svc *InvoiceService) Send(ctx context.Context, id string) error {\n\tinvoice, err := svc.store.Invoice(ctx, id)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"load invoice %s: %w\", id, err)\n\t}\n\treturn svc.mailer.Deliver(ctx, invoice.Recipient, invoice.Body())\n}\n"
+      },
+      {
+        "id": "service_registry_go",
+        "fp_class": "service_naming",
+        "note": "Fields, parameters and a getter named after the Service type they hold",
+        "code": "package mesh\n\ntype Registry struct {\n\tservices     map[string]*Service\n\tserviceNames []string\n}\n\nfunc (r *Registry) Register(name string, service *Service) {\n\tr.services[name] = service\n\tr.serviceNames = append(r.serviceNames, name)\n}\n\nfunc (r *Registry) Service(name string) (*Service, bool) {\n\tservice, ok := r.services[name]\n\treturn service, ok\n}\n"
+      },
+      {
+        "id": "strings_builder_go",
+        "fp_class": "service_naming",
+        "note": "Standard library strings.Builder, declared and as paired composite literals",
+        "code": "package report\n\nfunc joinLines(lines []string) string {\n\tvar sb strings.Builder\n\tfor _, line := range lines {\n\t\tsb.WriteString(line)\n\t\tsb.WriteByte('\\n')\n\t}\n\treturn sb.String()\n}\n\nfunc renderTable(rows []Row) (string, string) {\n\thead, body := &strings.Builder{}, &strings.Builder{}\n\thead.WriteString(rows[0].Header())\n\tfor _, row := range rows {\n\t\tbody.WriteString(row.Line())\n\t}\n\treturn head.String(), body.String()\n}\n"
+      },
+      {
+        "id": "string_builder_java",
+        "fp_class": "service_naming",
+        "note": "Java StringBuilder, the standard way to build strings",
+        "code": "public final class CsvLine {\n    public static String join(List<String> cells) {\n        StringBuilder builder = new StringBuilder();\n        for (String cell : cells) {\n            if (builder.length() > 0) {\n                builder.append(',');\n            }\n            builder.append(cell);\n        }\n        return builder.toString();\n    }\n}\n"
+      },
+      {
+        "id": "build_constraint_directives_go",
+        "fp_class": "directive",
+        "note": "go:build, go:generate, go:linkname and go:noinline compiler directives",
+        "code": "//go:build linux && amd64\n\npackage sysinfo\n\nimport _ \"unsafe\"\n\n//go:generate stringer -type=State\n\n//go:linkname nanotime runtime.nanotime\nfunc nanotime() int64\n\n//go:noinline\nfunc bootTime() int64 {\n\treturn nanotime()\n}\n"
+      },
+      {
+        "id": "embed_directives_go",
+        "fp_class": "directive",
+        "note": "Several go:embed directives whose paths share words with the variable names",
+        "code": "package assets\n\nimport \"embed\"\n\n//go:embed templates/*.html\nvar templateFS embed.FS\n\n//go:embed VERSION\nvar version string\n\n//go:embed static/css/site.css\nvar siteStylesheet []byte\n"
+      },
+      {
+        "id": "kubebuilder_markers_go",
+        "fp_class": "directive",
+        "note": "Controller-gen markers and a wrapped doc comment above a struct",
+        "code": "package v1\n\n// WidgetSpec defines the desired state of a Widget, including the image to\n// run and how many replicas to keep.\ntype WidgetSpec struct {\n\t// +kubebuilder:validation:Required\n\t// +kubebuilder:validation:MinLength=1\n\tImage string `json:\"image\"`\n\n\t// +optional\n\t// +kubebuilder:default=1\n\tReplicas *int32 `json:\"replicas,omitempty\"`\n}\n"
+      },
+      {
+        "id": "wrapped_doc_tail_go",
+        "fp_class": "doc_tail",
+        "note": "Go doc comment wrapped onto a short final line directly above the func",
+        "code": "package retry\n\n// Do calls fn until it succeeds or ctx is done, sleeping between attempts\n// with exponential backoff capped at maxDelay so a flapping dependency is\n// not hammered.\nfunc Do(ctx context.Context, maxDelay time.Duration, fn func() error) error {\n\tdelay := 10 * time.Millisecond\n\tfor {\n\t\terr := fn()\n\t\tif err == nil {\n\t\t\treturn nil\n\t\t}\n\t\tif !sleep(ctx, delay) {\n\t\t\treturn ctx.Err()\n\t\t}\n\t\tdelay = min(2*delay, maxDelay)\n\t}\n}\n"
+      },
+      {
+        "id": "wrapped_comment_tail_py",
+        "fp_class": "doc_tail",
+        "note": "Python block comment explaining why, wrapped onto a short last line",
+        "code": "def backoff_delays(base, cap, attempts):\n    # Double the delay after each failed attempt but never exceed the cap so\n    # retries stay bounded.\n    delay = base\n    for _ in range(attempts):\n        yield delay\n        delay = min(delay * 2, cap)\n"
+      },
+      {
+        "id": "wrapped_comment_tail_ts",
+        "fp_class": "doc_tail",
+        "note": "TypeScript line comment explaining why, wrapped onto a short last line",
+        "code": "export function chunk<T>(items: T[], size: number): T[][] {\n  // Pages are cut from the front so callers that stream results can\n  // render the first page early.\n  const pages: T[][] = [];\n  for (let start = 0; start < items.length; start += size) {\n    pages.push(items.slice(start, start + size));\n  }\n  return pages;\n}\n"
+      },
+      {
+        "id": "set_of_struct_literals_go",
+        "fp_class": "empty_literal",
+        "note": "map[string]struct{}{} set, struct{}{} insertion and an empty slice literal",
+        "code": "package feed\n\nfunc uniqueTags(posts []Post) []string {\n\tseen := map[string]struct{}{}\n\ttags := []string{}\n\tfor _, post := range posts {\n\t\tfor _, tag := range post.Tags {\n\t\t\tif _, ok := seen[tag]; ok {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tseen[tag] = struct{}{}\n\t\t\ttags = append(tags, tag)\n\t\t}\n\t}\n\treturn tags\n}\n"
+      },
+      {
+        "id": "semaphore_channel_go",
+        "fp_class": "empty_literal",
+        "note": "chan struct{} fields, make(chan struct{}) and a struct{}{} send",
+        "code": "package pool\n\ntype Limiter struct {\n\tslots chan struct{}\n\tdone  chan struct{}\n}\n\nfunc NewLimiter(size int) *Limiter {\n\treturn &Limiter{slots: make(chan struct{}, size), done: make(chan struct{})}\n}\n\nfunc (lim *Limiter) Acquire() {\n\tlim.slots <- struct{}{}\n}\n\nfunc (lim *Limiter) Release() {\n\t<-lim.slots\n}\n"
+      },
+      {
+        "id": "zero_value_default_return_go",
+        "fp_class": "empty_literal",
+        "note": "return Port{}, nil for an empty input, not after an error",
+        "code": "package netcfg\n\nfunc parsePort(raw string) (Port, error) {\n\tif raw == \"\" {\n\t\treturn Port{}, nil\n\t}\n\tnum, err := strconv.Atoi(raw)\n\tif err != nil {\n\t\treturn Port{}, fmt.Errorf(\"parse port %q: %w\", raw, err)\n\t}\n\treturn Port{Number: num}, nil\n}\n"
+      },
+      {
+        "id": "go_testing_names_go",
+        "fp_class": "test_name",
+        "note": "Descriptive Test, Benchmark, Example and Fuzz function names",
+        "code": "package jsonx\n\nfunc TestParseRejectsTrailingCommaInNestedArrays(t *testing.T) {\n\tif _, err := Parse(`[[1, 2,]]`); err == nil {\n\t\tt.Fatal(\"expected a trailing comma to be rejected\")\n\t}\n}\n\nfunc BenchmarkEncodeLargeStructWithNestedSlices(b *testing.B) {\n\tpayload := largePayload()\n\tfor b.Loop() {\n\t\tEncode(payload)\n\t}\n}\n\nfunc ExampleDecoder_DecodeStreamWithTrailingWhitespace() {\n\tdec := NewDecoder(strings.NewReader(`{\"a\": 1}  `))\n\tfmt.Println(dec.More())\n}\n\nfunc FuzzParseHeaderValuesWithQuotedCommas(f *testing.F) {\n\tf.Add(`a=\"b,c\", d`)\n\tf.Fuzz(func(t *testing.T, raw string) {\n\t\tParseHeader(raw)\n\t})\n}\n"
+      },
+      {
+        "id": "testify_suite_names_go",
+        "fp_class": "test_name",
+        "note": "testify suite methods named TestXxx on a suite receiver",
+        "code": "package checkout\n\nfunc (s *CheckoutSuite) TestRejectsExpiredCouponsForGuestUsers() {\n\terr := s.checkout.Apply(Order{Coupon: \"OLD\", Guest: true})\n\ts.Require().ErrorIs(err, ErrCouponExpired)\n}\n\nfunc (s *CheckoutSuite) TestAcceptsCurrentCouponsForMemberAccounts() {\n\terr := s.checkout.Apply(Order{Coupon: \"NEW\", Guest: false})\n\ts.Require().NoError(err)\n}\n"
+      },
+      {
+        "id": "set_literal_entries_go",
+        "fp_class": "empty_literal",
+        "source": "go_module_cache",
+        "note": "Set literal with four or more {} on one line (shape seen in the Go module cache)",
+        "code": "package acl\n\nvar writeScopes = map[string]struct{}{\"write\": {}, \"admin\": {}, \"owner\": {}}\n\nfunc canWrite(scope string) bool {\n\t_, ok := writeScopes[scope]\n\treturn ok\n}\n"
+      },
+      {
+        "id": "set_literal_table_go",
+        "fp_class": "empty_literal",
+        "source": "go_module_cache",
+        "note": "Consecutive set-literal lines with no try/catch anywhere (shape seen in the Go module cache)",
+        "code": "package roles\n\nvar scopesByRole = map[string]map[string]struct{}{\n\t\"viewer\": {\"read\": {}, \"list\": {}, \"watch\": {}, \"export\": {}},\n\t\"editor\": {\"read\": {}, \"list\": {}, \"watch\": {}, \"write\": {}},\n\t\"admin\":  {\"read\": {}, \"list\": {}, \"write\": {}, \"grant\": {}},\n\t\"owner\":  {\"read\": {}, \"write\": {}, \"grant\": {}, \"delete\": {}},\n\t\"auditor\": {\"read\": {}, \"list\": {}, \"export\": {}, \"watch\": {}},\n}\n"
+      },
+      {
+        "id": "test_named_after_provider_go",
+        "fp_class": "test_name",
+        "source": "go_module_cache",
+        "note": "Test named after a Provider type under test (shape seen in the Go module cache)",
+        "code": "package auth\n\nfunc TestTokenProvider_FallsBackToEnvProvider(t *testing.T) {\n\tt.Setenv(\"API_TOKEN\", \"abc\")\n\tif got := NewTokenProvider().Token(); got != \"abc\" {\n\t\tt.Fatalf(\"token = %q\", got)\n\t}\n}\n"
+      },
+      {
+        "id": "pytest_names_py",
+        "fp_class": "test_name",
+        "note": "pytest function and class-method names that describe the behavior",
+        "code": "def test_checkout_rejects_expired_coupons_for_guest_users():\n    with pytest.raises(CouponExpired):\n        checkout(Order(coupon=\"OLD\", guest=True))\n\n\nclass TestInvoiceRendering:\n    def test_renders_line_items_in_insertion_order_when_unsorted(self):\n        lines = render(INVOICE).splitlines()\n        assert lines == [\"Invoice\", \"widget x2\", \"gadget x1\"]\n"
+      }
+    ],
+    "recall_guards": [
+      {
+        "id": "service_impl_ceremony_java",
+        "expected_kind": "poor_naming",
+        "expected_line": 1,
+        "note": "Service stacked with Impl is still ceremony",
+        "code": "public class PaymentServiceImpl implements PaymentService {\n    private final PaymentGateway gateway;\n}\n"
+      },
+      {
+        "id": "service_manager_ceremony_go",
+        "expected_kind": "poor_naming",
+        "expected_line": 3,
+        "note": "Service stacked with Manager and Factory is still ceremony",
+        "code": "package users\n\ntype UserServiceManager struct {\n\tfactory *UserServiceFactory\n}\n"
+      },
+      {
+        "id": "long_non_test_name_go",
+        "expected_kind": "poor_naming",
+        "expected_line": 3,
+        "note": "The test-name exemption must not exempt ordinary long names",
+        "code": "package orders\n\nfunc processAllIncomingCustomerOrderRequestsWithRetries(ctx context.Context, queue *Queue) error {\n\treturn queue.Drain(ctx)\n}\n"
+      },
+      {
+        "id": "step_narration_go",
+        "expected_kind": "noisy_comment",
+        "expected_line": 4,
+        "note": "Step narration in Go",
+        "code": "package users\n\nfunc countActive(users []User) int {\n\t// Step 1: loop through the users\n\tcount := 0\n\tfor _, user := range users {\n\t\tif user.Active {\n\t\t\tcount++\n\t\t}\n\t}\n\treturn count\n}\n"
+      },
+      {
+        "id": "two_line_step_narration_py",
+        "expected_kind": "noisy_comment",
+        "expected_line": 3,
+        "note": "Narration on the second line of a comment block is still narration",
+        "code": "def total(prices):\n    # Step 1: start the running sum\n    # Step 2: add each price\n    return sum(prices)\n"
+      },
+      {
+        "id": "todo_comment_go",
+        "expected_kind": "noisy_comment",
+        "expected_line": 4,
+        "note": "TODO noise in Go",
+        "code": "package retry\n\nfunc budget(attempts int) time.Duration {\n\t// TODO: fix this later\n\treturn time.Duration(attempts) * time.Second\n}\n"
+      },
+      {
+        "id": "empty_catch_js",
+        "expected_kind": "swallowed_error",
+        "expected_line": 4,
+        "note": "catch with an empty body",
+        "code": "export function loadSettings(path) {\n  try {\n    return JSON.parse(readFileSync(path, \"utf8\"));\n  } catch (err) {}\n}\n"
+      },
+      {
+        "id": "catch_console_only_js",
+        "expected_kind": "swallowed_error",
+        "expected_line": 4,
+        "note": "A catch whose only handler line logs must still match its opener",
+        "code": "export function loadSettings(path) {\n  try {\n    return JSON.parse(readFileSync(path, \"utf8\"));\n  } catch (err) {\n    console.log(err);\n  }\n}\n"
+      },
+      {
+        "id": "or_empty_fallback_js",
+        "expected_kind": "swallowed_error",
+        "expected_line": 2,
+        "note": "Empty literal in fallback position",
+        "code": "export function tagsFor(post) {\n  const tags = post.meta.tags || [];\n  return tags.map((tag) => tag.trim());\n}\n"
+      },
+      {
+        "id": "err_to_zero_value_go",
+        "expected_kind": "swallowed_error",
+        "expected_line": 6,
+        "note": "return T{}, nil directly inside if err != nil discards the error",
+        "code": "package config\n\nfunc Load(path string) (Config, error) {\n\tdata, err := os.ReadFile(path)\n\tif err != nil {\n\t\treturn Config{}, nil\n\t}\n\treturn Parse(data)\n}\n"
+      },
+      {
+        "id": "err_to_nil_nil_go",
+        "expected_kind": "swallowed_error",
+        "expected_line": 6,
+        "note": "return nil, nil directly inside if err != nil discards the error",
+        "code": "package cache\n\nfunc (c *Cache) Get(key string) (*Entry, error) {\n\traw, err := c.store.Load(key)\n\tif err != nil {\n\t\treturn nil, nil\n\t}\n\treturn decodeEntry(raw)\n}\n"
+      }
+    ]
+  }
+}

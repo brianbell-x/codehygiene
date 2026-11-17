@@ -13,7 +13,7 @@ import sys
 from typing import Any
 import numpy as np
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 __all__ = [
     "ARCHETYPE_NAMES", "MAX_COLS", "MAX_REL_DIST", "Result", "SCORE_NAMES",
     "SQUIGGLE_KINDS", "SQUIGGLE_MESSAGES", "Squiggle", "encode_byte_grid",

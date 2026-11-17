@@ -7,8 +7,8 @@ has entries strictly in {-1, 0, +1} (packed at 5 trits per uint8 byte), paired o
     channels (HC_*), using causal prefix matrices and De Morgan closer gates to mask strings
     (16-quote sawtooth) and single-line comments (//, /* */, # , -- ) left-to-right.
   - Block 1 (_build_block1): Runs k=3, 7, 13 {-1, 0, +1} integer-margin convolutions,
-    cross-line docstring/comment sawtooth + Dyck paren-balance filters (ml_proj, ml_gate_w,
-    ml_paren_w), and 40 SimHash stem filters (_sketch_bank).
+    cross-line docstring/comment sawtooth + Dyck paren-balance and previous-line filters
+    (ml_proj, ml_gate_w, ml_paren_w), and 40 SimHash stem filters (_sketch_bank).
   - Block 2 (_build_block2_and_heads): Two cross-line sink-attention + MLP passes using
     Paley Hadamard and Gram-fitted ternary projections populate context and issue registers.
   - Block 3 (_build_block2_and_heads): Projects Z into 8 per-line squiggle probabilities
@@ -82,10 +82,12 @@ N_SQ_SAW = 128
 N_ML_GATE = N_DQ_SAW + N_SQ_SAW + 2
 N_PAREN_STEPS = 16
 N_PAREN_SUF = 2 * N_PAREN_STEPS
+N_PREV_LINE = 4
+N_ML_IN = 7
 
-# Line-level residual stream Z registers (238 channels per line)
-N_LMLP2 = 158
-N_Z = 238
+# Line-level residual stream Z registers (240 channels per line)
+N_LMLP2 = 160
+N_Z = 240
 (
     Z_ACTIVE, Z_HAS_CODE, Z_PURE_COMMENT, Z_OPEN_NET, Z_INDENT,
     Z_DEPTH8, Z_DEPTH10, Z_DEPTH12, Z_ODD_INDENT, Z_MOD4_EQ2, Z_MOD4_EQ0,
@@ -147,7 +149,8 @@ N_Z = 238
     Z_FILE_CONTAINERS, Z_HAS_CONTAINER, Z_ENCLOSING_DEEP24,
     Z_RAW_NEST_TOP, Z_SHALLOW_LINE, Z_CRYPTIC_GATE,
 ) = range(148, 158)
-Z_CODE_SKETCH, Z_COMM_SKETCH, SKETCH_DIM = 158, 198, 40
+Z_PREV_COMMENT, Z_NIL_SWALLOW = 158, 159
+Z_CODE_SKETCH, Z_COMM_SKETCH, SKETCH_DIM = 160, 200, 40
 
 # Named attention head slices
 H0_QK = slice(0, 16)
@@ -203,11 +206,12 @@ def _sub_filter(
     wr: int = 0,
     cs: int = 0,
     req_left_id: int = 0,
+    eol: int = 0,
     out_scale: float = 1.0,
 ) -> None:
     """Write a {-1, 0, +1} ASCII bit-template into `channel` using integer max-bound margin."""
     left_pad = max(wl, req_left_id)
-    span = len(pattern) + left_pad + wr
+    span = len(pattern) + left_pad + max(wr, eol)
     start = (kernel.shape[0] - span) // 2 + left_pad
     kernel[:, :, channel] = 0
     thresh = 7 * len(pattern)
@@ -219,6 +223,8 @@ def _sub_filter(
         thresh += 1
     if wr:
         kernel[start + len(pattern), HC_ID, channel] = -1
+    if eol:
+        kernel[start + len(pattern), HC_ACT, channel] = -1
     if lead:
         kernel[start, HC_LEAD, channel] = 1
         thresh += 1
@@ -642,6 +648,13 @@ _K13_V04_COMM = (
     ("  return ", 1),
 )
 
+# Go directive comments (//go:embed, //go:build, // +kubebuilder markers) are code, not prose
+_K7_DIRECTIVE_COMM = ("//go:", "// +")
+
+# Test declarations whose long descriptive names are idiomatic (Go testing, testify, pytest)
+_K7_TEST_METHOD = ") Test"
+_K13_TEST_DECLS = ("func Test", "func Benchmar", "func Example", "func Fuzz", "def test_")
+
 _SUFFIX_GRAVEYARD = frozenset({"_old", "_bak", "_backup", "_deprecated", "Deprecated"})
 
 _CSUM_SPECS = (
@@ -691,16 +704,21 @@ def _build_multiline_gates(
     feat: dict[str, int],
     num_raw_u: int,
 ) -> None:
-    """Compile {-1, 0, +1} docstring/block-comment sawtooth and 16-line Dyck paren filters."""
-    ml_proj = np.zeros((num_raw_u, 4), dtype=np.int8)
+    """Compile {-1, 0, +1} docstring/comment sawtooth, Dyck paren, and previous-line filters."""
+    ml_proj = np.zeros((num_raw_u, N_ML_IN), dtype=np.int8)
+    ml_proj_s = np.ones((N_ML_IN,), dtype=np.float32)
     ml_proj[feat["triple_dq"], 0] = 1
     ml_proj[feat["triple_sq"], 1] = 1
     ml_proj[[feat["ml_bcomm_open"], feat["ml_bcomm_close"]], 2] = [1, -1]
     ml_proj[[feat["code_lparen"], feat["code_rparen"]], 3] = [1, -1]
+    ml_proj[feat["comment_mask"], 4] = 1
+    ml_proj[feat["code_chars"], 5] = 1
+    ml_proj[feat["err_check"], 6] = 1
+    ml_proj_s[5] = float(MAX_COLS)
     trit_mats["ml_proj"] = ml_proj
-    vecs_1d["ml_proj_s"] = np.ones((4,), dtype=np.float32)
+    vecs_1d["ml_proj_s"] = ml_proj_s
 
-    ml_gate_w = np.zeros((4, N_ML_GATE), dtype=np.int8)
+    ml_gate_w = np.zeros((N_ML_IN, N_ML_GATE), dtype=np.int8)
     ml_gate_s = np.ones((N_ML_GATE,), dtype=np.float32)
     ml_gate_b = np.zeros((N_ML_GATE,), dtype=np.float32)
     for step in range(N_DQ_SAW):
@@ -721,14 +739,23 @@ def _build_multiline_gates(
     trit_mats["ml_gate_w"] = ml_gate_w
     vecs_1d["ml_gate_s"], vecs_1d["ml_gate_b"] = ml_gate_s, ml_gate_b
 
-    ml_paren_w = np.zeros((2 * N_PAREN_STEPS + 1, 4, N_PAREN_SUF), dtype=np.int8)
-    ml_paren_s = np.ones((N_PAREN_SUF,), dtype=np.float32)
-    ml_paren_b = np.zeros((N_PAREN_SUF,), dtype=np.float32)
+    n_line_conv = N_PAREN_SUF + N_PREV_LINE
+    ml_paren_w = np.zeros((2 * N_PAREN_STEPS + 1, N_ML_IN, n_line_conv), dtype=np.int8)
+    ml_paren_s = np.ones((n_line_conv,), dtype=np.float32)
+    ml_paren_b = np.zeros((n_line_conv,), dtype=np.float32)
     for step_k in range(N_PAREN_STEPS):
         span_k = step_k + 1
         u_hi, u_lo = 2 * step_k, 2 * step_k + 1
         ml_paren_w[N_PAREN_STEPS - span_k : N_PAREN_STEPS, 3, [u_hi, u_lo]] = 1
         ml_paren_b[[u_hi, u_lo]] = [0.0, -1.0]
+
+    # Tap L-1 only: clamp(comment cells - 128 * code chars) and clamp(err != nil count)
+    prev_tap = N_PAREN_STEPS - 1
+    prev_comm, prev_err = N_PAREN_SUF, N_PAREN_SUF + 2
+    ml_paren_w[prev_tap, [4, 5], prev_comm] = [1, -1]
+    ml_paren_w[prev_tap, [4, 5], prev_comm + 1] = [1, -1]
+    ml_paren_w[prev_tap, 6, [prev_err, prev_err + 1]] = 1
+    ml_paren_b[N_PAREN_SUF:] = [0.0, -1.0, 0.0, -1.0]
     trit_mats["ml_paren_w"] = ml_paren_w
     vecs_1d["ml_paren_s"], vecs_1d["ml_paren_b"] = ml_paren_s, ml_paren_b
 
@@ -927,6 +954,15 @@ def _build_block1(
         _sub_filter(conv7_w, conv7_s, conv7_b, ch_i, pat, code=False, comm=True, cs=cs)
         feat[f"c:{pat}"] = off_c7 + ch_i
 
+    for offset, pat in enumerate(_K7_DIRECTIVE_COMM):
+        ch_i = 122 + offset
+        _sub_filter(conv7_w, conv7_s, conv7_b, ch_i, pat, code=False, comm=True)
+        feat[f"c:{pat}"] = off_c7 + ch_i
+    _sub_filter(conv7_w, conv7_s, conv7_b, 124, _K7_TEST_METHOD, cs=1)
+    feat[_K7_TEST_METHOD] = off_c7 + 124
+    _sub_filter(conv7_w, conv7_s, conv7_b, 125, ", nil", eol=1)
+    feat["nil_eol"] = off_c7 + 125
+
     _stamp_triple_quote(conv7_w, conv7_s, conv7_b, 117, '"', require_lead=False)
     _stamp_triple_quote(conv7_w, conv7_s, conv7_b, 118, "'", require_lead=False)
     _stamp_triple_quote(conv7_w, conv7_s, conv7_b, 119, '"', require_lead=True)
@@ -975,6 +1011,13 @@ def _build_block1(
         _sub_filter(conv13_w, conv13_s, conv13_b, ch_i, pat, code=False, comm=True, cs=cs)
         feat[f"c:{pat}"] = off_c13 + ch_i
 
+    for offset, pat in enumerate(_K13_TEST_DECLS):
+        ch_i = 75 + offset
+        _sub_filter(conv13_w, conv13_s, conv13_b, ch_i, pat, cs=1, lead=1)
+        feat[pat] = off_c13 + ch_i
+    _sub_filter(conv13_w, conv13_s, conv13_b, 80, "err != nil")
+    feat["err_check"] = off_c13 + 80
+
     num_raw_u = n_csum + n_conv3 + n_conv7 + n_conv13
     _build_multiline_gates(trit_mats, vecs_1d, feat, num_raw_u)
 
@@ -988,8 +1031,10 @@ def _build_block1(
         ("===_digit", 1.5), ("== -1", 1.5), ("||", -2.5), ("typeof", -2.5),
         ("type(", -2.5), (".code", -3.0), ("=== undefined", -3.0),
     ]
+    # Service and Builder are domain and stdlib type names (strings.Builder, StringBuilder);
+    # they only add weight when stacked with a ceremony suffix (UserServiceImpl)
     ceremony_terms = [
-        ("Manager", 1.0), ("Factory", 1.2), ("Service", 0.9), ("Builder", 0.8),
+        ("Manager", 1.0), ("Factory", 1.2), ("Service", 0.3), ("Builder", 0.3),
         ("Wrapper", 1.0), ("Helper", 0.9), ("Impl", 1.1), ("Abstract", 1.3),
         ("Repository", 1.1), ("Configuration", 0.8), ("Controller", 0.9),
         ("Strategy", 1.0), ("Provider", 0.9), ("Processor", 0.9),
@@ -1027,13 +1072,20 @@ def _build_block1(
     container_hdr_terms = [
         ("class ", 2.0), ("impl ", 2.0), ("impl<", 2.0), ("namespace ", 2.0),
     ]
+    # Test names describe the unit under test: allow length and the SUT's own type names
+    test_decl_terms = [(pat, -3.0) for pat in (*_K13_TEST_DECLS, _K7_TEST_METHOD)]
+    # Empty `{}` only signals a swallowed error beside `catch`; a line holds at most 64 pairs
+    catch_gate = float(MAX_COLS // 2)
+    pure_comment_terms = [("comment_chars", 1.0), ("code_chars", -5.0)] + [
+        (f"c:{pat}", -float(MAX_COLS)) for pat in _K7_DIRECTIVE_COMM
+    ]
 
     line_rules: list[tuple[list[tuple[str, float]], float, int, float]] = [
         ([("has_nonspace", 1.0)], 0.0, Z_ACTIVE, 1.0),
         ([("code_chars", 1.0)], 0.0, Z_HAS_CODE, 1.0),
         ([("code_chars", 1.0)], -1.0, Z_HAS_CODE, -1.0),
-        ([("comment_chars", 1.0), ("code_chars", -5.0)], -2.0, Z_PURE_COMMENT, 1.0),
-        ([("comment_chars", 1.0), ("code_chars", -5.0)], -3.0, Z_PURE_COMMENT, -1.0),
+        (pure_comment_terms, -2.0, Z_PURE_COMMENT, 1.0),
+        (pure_comment_terms, -3.0, Z_PURE_COMMENT, -1.0),
         ([("comment_chars", -0.25), ("code_chars", -5.0)], 11.0, Z_SHORT_COMMENT, 1.0),
         ([("comment_chars", -0.25), ("code_chars", -5.0)], 10.0, Z_SHORT_COMMENT, -1.0),
 
@@ -1066,10 +1118,10 @@ def _build_block1(
         (hardcoded_branch_terms, -4.2, Z_HARDCODED_CASE, -1.0),
         ([("switch", 2.0), ("match", 2.0), ("case ", 1.5), ("break", 1.5)], 0.0, Z_SWITCH_BLOCK, 1.0),
 
-        (ceremony_terms, 0.0, Z_CEREMONY, 1.0),
+        (ceremony_terms + test_decl_terms, 0.0, Z_CEREMONY, 1.0),
         (stdlib_idiom_terms, 0.0, Z_STDLIB_IDIOM, 1.0),
-        ([("ident_13ch", 0.11)] + [(key, -wt * 0.25) for key, wt in stdlib_idiom_terms],
-         -1.05, Z_LONG_IDENT, 1.0),
+        ([("ident_13ch", 0.11)] + [(key, -wt * 0.25) for key, wt in stdlib_idiom_terms]
+         + test_decl_terms, -1.05, Z_LONG_IDENT, 1.0),
         ([("one_char_id", 1.0), ("bracket_1ch", -1.0), ("for", -2.0)], 0.0, Z_ONE_CHAR_ID, 1.0),
         ([("one_char_id", 1.0), ("bracket_1ch", -1.0), ("for", -2.0)], -1.0, Z_CRYPTIC_GATE, 1.0),
         ([("one_char_id", 1.0), ("bracket_1ch", -1.0), ("for", -2.0)], -2.0, Z_CRYPTIC_GATE, -1.0),
@@ -1077,7 +1129,7 @@ def _build_block1(
 
         ([("catch (", 1.0), ("except:", 1.2), ("except Excep", 1.2), ("except BaseE", 1.2)],
          0.0, Z_TRY_CATCH, 1.0),
-        ([("catch", 1.0), ("{}", 1.0)], -1.5, Z_TRY_CATCH, 2.0),
+        ([("catch", catch_gate), ("{}", 1.0)], -catch_gate - 0.5, Z_TRY_CATCH, 2.0),
         ([("throw", 1.5), ("raise", 1.5), (".code", 1.5), ("reject(", 1.5),
           ("cb(", 1.5), ("emit(", 1.0), ("destroy", 1.2), ("callback(", 1.5)],
          0.0, Z_REAL_HANDLER, 1.0),
@@ -1233,8 +1285,8 @@ def _build_block1(
         scaled_cache[cache_key] = out_idx
         return out_idx
 
-    num_u = num_raw_u + N_ML_GATE + N_PAREN_SUF
-    n_lm1 = 148
+    num_u = num_raw_u + N_ML_GATE + N_PAREN_SUF + N_PREV_LINE
+    n_lm1 = 152
     lm1_w = np.zeros((num_u, n_lm1), dtype=np.int8)
     lm1_s = np.ones((n_lm1,), dtype=np.float32)
     lm1_b = np.zeros((n_lm1,), dtype=np.float32)
@@ -1317,9 +1369,23 @@ def _build_block1(
     lm1_b[[u_ind_fn_hi, u_ind_fn_lo]] = [-3.5, -4.5]
     lm2_w[[u_ind_fn_hi, u_ind_fn_lo], Z_CONTAINER_HDR] = [1, -1]
 
+    # Previous-line registers: comment-block continuation and `return ..., nil` under `err != nil`
+    off_prev = off_ps + N_PAREN_SUF
+    u_prev_comm = len(line_rules) + 6
+    lm1_w[[off_prev, off_prev + 1], u_prev_comm] = [1, -1]
+    lm2_w[u_prev_comm, Z_PREV_COMMENT] = 1
+
+    u_nil_hi, u_nil_lo = len(line_rules) + 7, len(line_rules) + 8
+    nil_cols = [off_prev + 2, off_prev + 3, feat["return"], feat["nil_eol"]]
+    for u_nil in (u_nil_hi, u_nil_lo):
+        lm1_w[nil_cols, u_nil] = [1, -1, 1, 1]
+    lm1_s[[u_nil_hi, u_nil_lo]] = 2.0
+    lm1_b[[u_nil_hi, u_nil_lo]] = [-5.0, -6.0]
+    lm2_w[[u_nil_hi, u_nil_lo], Z_NIL_SWALLOW] = [1, -1]
+
     # Emit helper scaled Z[87..112] registers for exact {-1, 0, +1} cmlp1_w & doc1_w
-    active_units = list(range(len(line_rules) + 6))
-    next_unit = len(line_rules) + 6
+    active_units = list(range(len(line_rules) + 9))
+    next_unit = len(line_rules) + 9
     next_z = 87
     z_helpers: dict[str, int] = {}
     helper_specs = (
@@ -1408,7 +1474,9 @@ def _build_block2_and_heads(
     a1_wq[Z_TRY_CATCH, h1_qk] = 1
     a1_wk[[Z_REAL_HANDLER, Z_EMPTY_HANDLER], h1_qk] = 1
     a1_wq_s[h1_qk] = a1_wk_s[h1_qk] = [float(np.sqrt(32.0)), float(np.sqrt(16.0))]
-    a1_br[1, center : center + 7] = 0.0
+    # Handler lines only outbid the sink when a try/catch opener queries them; a line with no
+    # opener (zero query) attends to the sink instead of averaging stray `{}` literals
+    a1_br[1, center : center + 7] = -3.5
 
     # Head 2 (L-8..L), Head 3 (L-9..L+9), Head 6 (file-wide with sink prior), Head 7 (L-3..L+3)
     a1_br[2, center - 8 : center + 1] = 0.0
@@ -1528,12 +1596,14 @@ def _build_block2_and_heads(
         ([(zh["one_r5"], 1), (Z_FILE_ONE_CHAR, 1), (Z_FILE_WORDS, -1),
           (zh["words_r5"], -1), (Z_CRYPTIC_GATE, 1), doc_veto],
          -2.15, [Z_RAW_CRYPTIC], 0.4, 2.2),
-        ([(Z_PURE_COMMENT, 1), (Z_SHORT_COMMENT, 1), (Z_RESTATES_CODE, 1), doc_veto],
+        ([(Z_PURE_COMMENT, 1), (Z_SHORT_COMMENT, 1), (Z_RESTATES_CODE, 1),
+          (Z_PREV_COMMENT, -1), doc_veto],
          -3.35, [Z_ISS_COMMENT], 1.0, 2.5),
         ([(Z_NARRATOR_TAG, 1), doc_veto], -0.45, [Z_ISS_COMMENT], 1.5, 2.2),
         ([(Z_TRY_CATCH, 1), (Z_NEAR_EMPTY_HANDLER, 1), (Z_NEAR_REAL_HANDLER, -1), doc_veto],
          -2.1, [Z_ISS_ERROR], 1.8, 2.5),
         ([(Z_FALLBACK_SWALLOW, 1), doc_veto], -0.35, [Z_ISS_ERROR], 1.4, 2.2),
+        ([(Z_NIL_SWALLOW, 1), doc_veto], -0.5, [Z_ISS_ERROR], 1.0, 4.0),
 
         ([(zh["chain_12"], 1), (zh["tern_125"], 1), (zh["o96_11"], 1), (zh["o80_025"], 1),
           (zh["stdlib_09"], -1), (zh["modhdr_30"], -1), doc_veto],
