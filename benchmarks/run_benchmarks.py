@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from functools import lru_cache
+import hashlib
 import importlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +22,40 @@ import numpy as np
 
 BENCH_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BENCH_DIR.parent
+GO_CORPUS_LINES = 60_000
+GO_CORPUS_MAX_FILE_LINES = 1_500
+
+_GO_TEST_FUNC = re.compile(r"^func (\([^)]*\) )?(Test|Benchmark|Example|Fuzz)\w*\(")
+_GO_DIRECTIVE = re.compile(r"^//(go:|\s*\+)")
+_NARRATION = re.compile(r"(?i)todo|fixme|step \d")
+_STRONG_CEREMONY = re.compile(r"Manager|Factory|Impl\b|Wrapper|Helper|Abstract")
+_FALLBACK_LITERAL = re.compile(r"\|\||\?\?| or |catch|except")
+_ERR_CHECK = re.compile(r"\berr != nil\b")
+
+
+def _is_doc_tail(text: str, prev: str) -> bool:
+    return text.startswith("//") and prev.startswith("//") and not _NARRATION.search(text)
+
+
+def _is_service_noun(text: str, _prev: str) -> bool:
+    return bool(re.search(r"Service|Builder", text)) and not _STRONG_CEREMONY.search(text)
+
+
+def _is_empty_literal(text: str, prev: str) -> bool:
+    if "{}" not in text or _FALLBACK_LITERAL.search(text):
+        return False
+    swallows_err = text.startswith("return ") and text.endswith(", nil") and _ERR_CHECK.search(prev)
+    return not swallows_err
+
+
+# Issue #3 false-positive shapes, checked in order: (label, squiggle kind, line predicate)
+_GO_FP_SHAPES = (
+    ("directive", "noisy_comment", lambda text, _prev: bool(_GO_DIRECTIVE.match(text))),
+    ("doc_tail", "noisy_comment", _is_doc_tail),
+    ("test_name", "poor_naming", lambda text, _prev: bool(_GO_TEST_FUNC.match(text))),
+    ("service_naming", "poor_naming", _is_service_noun),
+    ("empty_literal", "swallowed_error", _is_empty_literal),
+)
 
 
 @lru_cache(maxsize=1)
@@ -254,6 +290,116 @@ def run_heldout_stdlib_suite(module_names: list[str]) -> dict[str, Any]:
     }
 
 
+def run_issue_suites(issues: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Gate reported false positives, held-out clean variants, and recall guards per issue."""
+    hygiene, _ = load_modules()
+    failures: list[str] = []
+    summary: dict[str, Any] = {}
+
+    for issue_id, spec in issues.items():
+        tag = f"issue{issue_id}"
+        reported_total = 0
+        still_flagged = 0
+        for case in spec["repro"]:
+            hits = [(sq.line, sq.kind) for sq in hygiene.score(case["code"]).squiggles]
+            reported = set(case["reported_lines"])
+            reported_total += len(reported)
+            still_flagged += len(reported & {line for line, _ in hits})
+            if hits:
+                failures.append(f"{tag}/repro/{case['id']}: squiggles {hits}")
+
+        clean_fps = 0
+        for case in spec["clean_variants"]:
+            hits = [(sq.line, sq.kind) for sq in hygiene.score(case["code"]).squiggles]
+            if hits:
+                clean_fps += 1
+                failures.append(f"{tag}/clean/{case['id']}: squiggles {hits}")
+
+        recalled = 0
+        for case in spec["recall_guards"]:
+            hits = [(sq.line, sq.kind) for sq in hygiene.score(case["code"]).squiggles]
+            if (case["expected_line"], case["expected_kind"]) in hits:
+                recalled += 1
+            else:
+                want = f"{case['expected_kind']}@{case['expected_line']}"
+                failures.append(f"{tag}/guard/{case['id']}: expected {want}, got {hits}")
+
+        summary[issue_id] = {
+            "reported_still_flagged": f"{still_flagged}/{reported_total}",
+            "clean_variant_fps": f"{clean_fps}/{len(spec['clean_variants'])}",
+            "recall_guards": f"{recalled}/{len(spec['recall_guards'])}",
+        }
+    return summary, failures
+
+
+def classify_go_issue_signature(lines: list[str], line_no: int, kind: str) -> str | None:
+    """Map a squiggle on real Go code to one of the issue #3 false-positive shapes."""
+    text = lines[line_no - 1].strip()
+    prev = lines[line_no - 2].strip() if line_no > 1 else ""
+    for label, shape_kind, matches in _GO_FP_SHAPES:
+        if kind == shape_kind and matches(text, prev):
+            return label
+    return None
+
+
+def sample_go_corpus(root: Path) -> list[tuple[str, str]]:
+    """Pick non-generated module-cache Go files in stable path-hash order up to a line budget."""
+    ranked: list[tuple[str, str, Path]] = []
+    for path in root.rglob("*.go"):
+        rel = path.relative_to(root).as_posix()
+        if rel.startswith("cache/") or "/vendor/" in rel or "/testdata/" in rel:
+            continue
+        ranked.append((hashlib.sha1(rel.encode("utf-8")).hexdigest(), rel, path))
+
+    picked: list[tuple[str, str]] = []
+    total = 0
+    for _, rel, path in sorted(ranked):
+        src = path.read_text("utf-8", "replace")
+        head = src[:1000]
+        loc = len(src.splitlines())
+        generated = "Code generated" in head and "DO NOT EDIT" in head
+        if generated or loc > GO_CORPUS_MAX_FILE_LINES:
+            continue
+        picked.append((rel, src))
+        total += loc
+        if total >= GO_CORPUS_LINES:
+            break
+    return picked
+
+
+def run_go_module_corpus() -> dict[str, Any]:
+    """Score a held-out sample of real third-party Go from the local module cache."""
+    root = Path(os.environ.get("GOMODCACHE") or Path.home() / "go" / "pkg" / "mod")
+    if not root.is_dir():
+        return {"available": False}
+
+    hygiene, _ = load_modules()
+    kind_counts: Counter[str] = Counter()
+    signatures: Counter[str] = Counter()
+    files = sample_go_corpus(root)
+    total_lines = 0
+    for _, src in files:
+        lines = src.splitlines()
+        total_lines += len(lines)
+        for sq in hygiene.score(src).squiggles:
+            kind_counts[sq.kind] += 1
+            signature = classify_go_issue_signature(lines, sq.line, sq.kind)
+            if signature:
+                signatures[signature] += 1
+
+    total_sq = sum(kind_counts.values())
+    return {
+        "available": True,
+        "files": len(files),
+        "total_lines": total_lines,
+        "total_squiggles": total_sq,
+        "squiggles_per_100_lines": round(total_sq / max(total_lines, 1) * 100.0, 2),
+        "by_kind": dict(sorted(kind_counts.items())),
+        "issue3_signatures": dict(sorted(signatures.items())),
+        "issue3_signature_total": sum(signatures.values()),
+    }
+
+
 def measure_latencies() -> dict[str, float]:
     hygiene, _ = load_modules()
     init_path = REPO_ROOT / "codehygiene" / "__init__.py"
@@ -337,7 +483,31 @@ def format_report(payload: dict[str, Any]) -> str:
         split_med,
         rate_str,
         "",
-        "## 4. Warm CPU Latency (Pure NumPy)",
+        "## 4. Issue Regression Suites (`benchmarks/issues.json`)",
+    ]
+    for issue_id, res in payload["issues"].items():
+        lines.append(
+            f"- Issue #{issue_id}: reported lines still flagged **{res['reported_still_flagged']}** · "
+            f"clean-variant FPs **{res['clean_variant_fps']}** · "
+            f"recall guards **{res['recall_guards']}**"
+        )
+
+    go_c = payload["go_corpus"]
+    lines += ["", "## 5. Held-Out Go Module Cache (report only)"]
+    if go_c.get("available"):
+        go_kinds = ", ".join(f"{kind} {count}" for kind, count in go_c["by_kind"].items())
+        go_sigs = ", ".join(f"{sig} {count}" for sig, count in go_c["issue3_signatures"].items())
+        lines += [
+            f"- `{go_c['files']}` files, `{go_c['total_lines']:,}` lines: "
+            f"**{go_c['squiggles_per_100_lines']:.2f} / 100 lines** ({go_kinds})",
+            f"- Issue #3 false-positive shapes: **{go_c['issue3_signature_total']}** ({go_sigs or 'none'})",
+        ]
+    else:
+        lines.append("- Skipped: no Go module cache found (set `GOMODCACHE`).")
+
+    lines += [
+        "",
+        "## 6. Warm CPU Latency (Pure NumPy)",
         "- " + " · ".join(f"`{key}`: **{val} ms**" for key, val in lat.items()),
     ]
     return "\n".join(lines)
@@ -348,17 +518,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="Output structured JSON")
     parser.add_argument("--check", action="store_true", help="Exit 1 on regression or probe failure")
     parser.add_argument("--skip-js", action="store_true", help="Skip Node.js browser parity check")
+    parser.add_argument("--skip-go", action="store_true", help="Skip the Go module-cache corpus")
     args = parser.parse_args(argv)
 
     hygiene, _ = load_modules()
     suites = json.loads((BENCH_DIR / "suites.json").read_text("utf-8"))
+    issues = json.loads((BENCH_DIR / "issues.json").read_text("utf-8"))
     ctrl_summary, ctrl_fail = run_controlled_suites(suites)
     adv_summary, adv_fail = run_adversarial_probes()
     js_summary, js_fail = ({"available": False}, []) if args.skip_js else run_js_parity_check()
     std_summary = run_heldout_stdlib_suite(suites["stdlib_modules"])
+    issue_summary, issue_fail = run_issue_suites(issues)
+    go_summary = {"available": False} if args.skip_go else run_go_module_corpus()
     latencies = measure_latencies()
 
-    all_failures = [*ctrl_fail, *adv_fail, *js_fail]
+    all_failures = [*ctrl_fail, *adv_fail, *js_fail, *issue_fail]
     weights_kib = round((REPO_ROOT / "codehygiene" / "weights.npz").stat().st_size / 1024.0, 2)
     payload = {
         "version": hygiene.__version__,
@@ -367,6 +541,8 @@ def main(argv: list[str] | None = None) -> int:
         "adversarial": adv_summary,
         "js_parity": js_summary,
         "held_out_stdlib": std_summary,
+        "issues": issue_summary,
+        "go_corpus": go_summary,
         "latency_ms": latencies,
         "passed": len(all_failures) == 0,
         "failures": all_failures,

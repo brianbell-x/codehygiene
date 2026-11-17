@@ -29,13 +29,13 @@
   - `codehygiene/update_check.py` — Cached 12-hour release check against `main/pyproject.toml` (skipped in `CI` or with `--no-update-check`).
   - `codehygiene/__main__.py` — Supports both `python3 -m codehygiene` and direct PEP 338 skill-directory execution (`python3 "<SKILL_DIR>"`).
   - `codehygiene/SKILL.md` — Agent skill definition discovered directly by `npx skills add brianbell-x/codehygiene`.
-  - `compile.py` — Deterministic Weight-Space Program that compiles all `35` `{-1, 0, +1}` matrices (`691,516` trits packed at 5 trits/byte) and `5,268` 1D scale/bias scalars into `codehygiene/weights.npz`.
-  - `codehygiene/weights.npz` — Compiled `14.47 KiB` (`1.58-bit` ternary) checkpoint loaded at runtime.
+  - `compile.py` — Deterministic Weight-Space Program that compiles all `35` `{-1, 0, +1}` matrices (`705,791` trits packed at 5 trits/byte) and `5,293` 1D scale/bias scalars into `codehygiene/weights.npz`.
+  - `codehygiene/weights.npz` — Compiled `14.85 KiB` (`1.58-bit` ternary) checkpoint loaded at runtime.
   - `docs/` — Zero-backend client-side browser playground unpacking `weights.npz` directly in JavaScript (`docs/engine.js`).
-  - `benchmarks/` — Reproducible controlled (`suites.json`), adversarial/anti-gaming, JS-parity, and held-out CPython stdlib benchmark suite (`run_benchmarks.py`).
+  - `benchmarks/` — Reproducible controlled (`suites.json`), per-GitHub-issue regression (`issues.json`), adversarial/anti-gaming, JS-parity, held-out CPython stdlib, and optional held-out Go module-cache benchmark suite (`run_benchmarks.py`). Add each reported false positive to `issues.json` with clean variants and recall guards before repairing its circuit.
 - **Architecture pipeline (`_forward`):**
   1. **Block 0 (Column Prefix & Masking):** `tok_emb (128, 47)` + `col_emb (128, 47)` -> `pre_conv3` -> causal prefix `W_causal1` -> `gate1` (16-quote sawtooth string parity + comment openers, including `##` banners) -> `W_causal2` -> `col_fuse` (`54` channels).
-  2. **Block 1 (Line Convolutions, Multiline State & Sketches):** Multi-scale column `Conv1D` (`k=3, 7, 13`) + cross-line `"""`/`'''`/`/* */` docstring/comment sawtooth (`ml_proj`, `ml_gate_w`) + 16-line Dyck parenthesis balance (`ml_paren_w`) + 4-gram SimHash `sketch` (`40` code + `40` comment dims, L2-normalized) + `lmlp1/2` -> `Z` (`L, 238`).
+  2. **Block 1 (Line Convolutions, Multiline State & Sketches):** Multi-scale column `Conv1D` (`k=3, 7, 13`) + cross-line `"""`/`'''`/`/* */` docstring/comment sawtooth (`ml_proj`, `ml_gate_w`) + 16-line Dyck parenthesis balance and previous-line comment/`err != nil` taps (`ml_paren_w`) + 4-gram SimHash `sketch` (`40` code + `40` comment dims, L2-normalized) + `lmlp1/2` -> `Z` (`L, 240`).
   3. **Block 2 (Banded Cross-Line Sink Attention):** Two `O(L)` residual blocks of 8-head relative-position attention (`[-32..+32]` + Bayesian sink priors `bsink`) and context MLPs (`cmlp1`, `cmlp2`) computing narrator-comment overlap, swallowed-error spans (`L..L+6`), class-relative indentation depth, golfed short-name/magic-index clusters, rhythm walls, and copy-paste clones.
   4. **Block 3 (System One Heads):** Per-line squiggle head (`sq_w`, 8 kinds) + docstring-masked Bayesian mean and 32-line peak-window density pooling into `doc1/doc2` (`score`, `rl_hygiene`, 6 four-level sub-scores, 5 style archetypes).
 - **Hard invariants:**
