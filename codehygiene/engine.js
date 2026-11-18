@@ -971,7 +971,8 @@ function buildLineState(params, block01, numLines) {
   const lineStats = linearSparse(lineHidden, numLines, params.lmlp2_w, params.lmlp2_b.data);
   const sketchDim = params.sketch_w.cols;
   const sketch = normalizeSketchSlices(banks.sketch, numLines, sketchDim);
-  return concatLastAxis([[lineStats, params.lmlp2_w.cols], [sketch, sketchDim]], numLines);
+  const state = concatLastAxis([[lineStats, params.lmlp2_w.cols], [sketch, sketchDim]], numLines);
+  return { state, sketch, sketchDim };
 }
 
 export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
@@ -980,7 +981,7 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
   const block01 = block01ActiveLines(params, grid, spans, numLines, width);
   const hcDim = params.col_fuse_w.cols;
   const cellMasks = extractCellMasks(block01.cells, spans, rowLens, numLines, width, hcDim);
-  const state = buildLineState(params, block01, numLines);
+  const { state, sketch, sketchDim } = buildLineState(params, block01, numLines);
 
   for (const layer of ["1", "2"]) {
     addInPlace(state, sinkAttention(
@@ -1011,6 +1012,8 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
     lineProbs,
     activeGate,
     cellMasks,
+    sketch,
+    sketchDim,
     rowLens,
     lines,
     numLines,
