@@ -1,25 +1,26 @@
-"""Closed-form 1.58-bit Ternary Weight-Space Program compiling circuits into weights.npz.
+"""codehygiene v0.6.1 — Closed-form 1.58-bit ternary weight-space compiler for weights.npz.
 
 Every 2D/3D weight, convolution, projection, causal, and embedding tensor in the model
 has entries strictly in {-1, 0, +1} (packed at 5 trits per uint8 byte), paired only with
 1D per-output-channel scales and biases:
   - Block 0 (_build_block0): Maps (L, 128) ASCII bytes + column positions into 54 per-cell
-    channels (HC_*), using causal prefix matrices and De Morgan closer gates to mask strings
-    (16-quote sawtooth) and single-line comments (//, /* */, # , -- ) left-to-right.
+    channels (HC_*), using causal prefix matrices and De Morgan closer gates to mask
+    strings (32-quote sawtooth), polyglot comments, Zig raw strings, and effective width.
   - Block 1 (_build_block1): Runs k=3, 7, 13 {-1, 0, +1} integer-margin convolutions,
     cross-line docstring/comment sawtooth + Dyck paren-balance and previous-line filters
-    (ml_proj, ml_gate_w, ml_paren_w), and 40 SimHash stem filters (_sketch_bank).
+    (ml_proj, ml_gate_w, ml_paren_w), and 3-slice 120-dim SimHash filters (_sketch_bank).
   - Block 2 (_build_block2_and_heads): Two cross-line sink-attention + MLP passes using
-    Paley Hadamard and Gram-fitted ternary projections populate context and issue registers.
+    Paley Hadamard and Gram-fitted ternary projections populate context and issue states.
   - Block 3 (_build_block2_and_heads): Projects Z into 8 per-line squiggle probabilities
-    and balanced-ternary System One document heads (31 logits).
+    and span-damped paired-clamp System One document heads.
 """
 
 from __future__ import annotations
 
-from collections import Counter
 import math
+from collections import Counter
 from pathlib import Path
+
 import numpy as np
 
 from codehygiene import MAX_COLS, MAX_REL_DIST, unpack_ternary_archive
@@ -27,11 +28,13 @@ from codehygiene import MAX_COLS, MAX_REL_DIST, unpack_ternary_archive
 _BITS7 = np.arange(7)
 _POW3 = 3 ** np.arange(5, dtype=np.uint8)
 _STOPWORDS = (
-    "this that with from have will when then else true fals null cons onst func unct "
-    "ctio tion retu etur turn thro hrow type ypeo peof numb stri trin ring unde ndef "
-    "defi efin fine ined only also more some into over must empt leng ngth erro rror "
-    "expo xpor modu odul data chan self none elif pass"
-).split()
+    "this", "that", "with", "from", "have", "will", "when", "then", "else", "true",
+    "fals", "null", "cons", "onst", "func", "unct", "ctio", "tion", "retu", "etur",
+    "turn", "thro", "hrow", "type", "ypeo", "peof", "numb", "stri", "trin", "ring",
+    "unde", "ndef", "defi", "efin", "fine", "ined", "only", "also", "more", "some",
+    "into", "over", "must", "empt", "leng", "ngth", "erro", "rror", "expo", "xpor",
+    "modu", "odul", "data", "chan", "self", "none", "elif", "pass",
+)
 
 # Per-cell feature channels emitted by Block 0 (54 channels per grid cell)
 (
@@ -168,7 +171,7 @@ N_Z = N_LMLP2 + 3 * SKETCH_DIM
 ) = range(148, 158)
 Z_PREV_COMMENT, Z_NIL_SWALLOW = 158, 159
 
-# Track 2 polyglot registers (Z[160..167]) and Track 3 structural-friction registers (Z[168..200])
+# Polyglot error registers (Z[160..167]) and structural-friction registers (Z[168..201])
 (
     Z_MATH_SIG, Z_KT_RUNCATCH, Z_KT_GETNULL, Z_SWIFT_TRYQ,
     Z_SWIFT_NIL, Z_TRY_BOOL_SIG, Z_NARROW_CATCH, Z_LUA_PCALL,
@@ -201,7 +204,7 @@ H1011_QK = slice(160, 192)
 def _balanced_trits(val: float, step: float, num_trits: int = 3) -> list[int]:
     """Balanced-ternary digits in {-1, 0, +1} representing round(val / step)."""
     max_int = (3**num_trits - 1) // 2
-    target_int = max(-max_int, min(max_int, int(round(val / step))))
+    target_int = max(-max_int, min(max_int, round(val / step)))
     digits: list[int] = []
     for _ in range(num_trits):
         rem = target_int % 3
@@ -230,6 +233,32 @@ def _stamp_char(kernel: np.ndarray, pos: int, channel: int, char: str) -> None:
     kernel[pos, HC_BN + _BITS7[~bits_on], channel] = 1
 
 
+def _stamp_pattern_guards(
+    kernel: np.ndarray,
+    channel: int,
+    start: int,
+    pat_len: int,
+    *,
+    wl: int,
+    req_left_id: int,
+    wr: int,
+    eol: int,
+    lead: int,
+) -> int:
+    extra_thresh = 0
+    if wl or req_left_id:
+        kernel[start - 1, HC_ID, channel] = -1 if wl else 1
+        extra_thresh += int(bool(req_left_id and not wl))
+    if wr:
+        kernel[start + pat_len, HC_ID, channel] = -1
+    if eol:
+        kernel[start + pat_len, HC_ACT, channel] = -1
+    if lead:
+        kernel[start, HC_LEAD, channel] = 1
+        extra_thresh += 1
+    return extra_thresh
+
+
 def _sub_filter(
     kernel: np.ndarray,
     scale: np.ndarray,
@@ -253,20 +282,10 @@ def _sub_filter(
     span = len(pattern) + left_pad + max(wr, eol)
     start = (kernel.shape[0] - span) // 2 + left_pad
     kernel[:, :, channel] = 0
-    thresh = 7 * len(pattern)
-
-    if wl:
-        kernel[start - 1, HC_ID, channel] = -1
-    elif req_left_id:
-        kernel[start - 1, HC_ID, channel] = 1
-        thresh += 1
-    if wr:
-        kernel[start + len(pattern), HC_ID, channel] = -1
-    if eol:
-        kernel[start + len(pattern), HC_ACT, channel] = -1
-    if lead:
-        kernel[start, HC_LEAD, channel] = 1
-        thresh += 1
+    thresh = 7 * len(pattern) + _stamp_pattern_guards(
+        kernel, channel, start, len(pattern),
+        wl=wl, req_left_id=req_left_id, wr=wr, eol=eol, lead=lead,
+    )
 
     for offset, char in enumerate(pattern):
         _stamp_char(kernel, start + offset, channel, char)
@@ -277,9 +296,8 @@ def _sub_filter(
 
     mid = start + len(pattern) // 2
     if code:
-        kernel[mid, HC_COMM, channel] = -1
-        if no_str:
-            kernel[mid, HC_STR, channel] = -1
+        mask_cols = [HC_COMM, HC_STR] if no_str else [HC_COMM]
+        kernel[mid, mask_cols, channel] = -1
     if comm:
         kernel[mid, HC_CODE, channel] = -1
 
@@ -383,7 +401,8 @@ def _fit_sketch_column(
         mask = np.ones(SKETCH_DIM, dtype=bool)
         mask[row] = False
         diffs = cur_vec[mask, None] * cand_vals[None, :] - res_gram[row, mask, None]
-        errs = 2.0 * np.sum(diffs * diffs, axis=0) + (cand_vals * cand_vals - res_gram[row, row]) ** 2
+        diag_err = (cand_vals * cand_vals - res_gram[row, row]) ** 2
+        errs = 2.0 * np.sum(diffs * diffs, axis=0) + diag_err
         best_trit = cand_trits[int(np.argmin(errs))]
         trits[row, col] = best_trit
         cur_vec[row] = best_trit * col_s
@@ -483,8 +502,8 @@ def _build_block0_preconv() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return pre_w, pre_s, pre_b
 
 
-def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarray]) -> None:
-    """Compile {-1, 0, +1} byte/column embeddings and quote/comment masking circuits."""
+def _build_embeddings() -> tuple[np.ndarray, np.ndarray]:
+    """Compile {-1, 0, +1} ASCII byte and column-index embeddings."""
     tok_emb = np.zeros((128, N_EMB), dtype=np.int8)
     tok_emb[1:, EMB_ACTIVE] = 1
     tok_emb[33:, EMB_NONSPACE] = 1
@@ -499,11 +518,11 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
         bits = ((ord(char.lower()) & 0x7F) >> _BITS7) & 1
         tok_emb[byte_val, EMB_ASCII_BITS : EMB_ASCII_BITS + 7] = bits.astype(np.int8)
 
-    for char, dst_col in zip("_/*:?.={}();", range(EMB_UND, EMB_SEMI + 1)):
+    for char, dst_col in zip("_/*:?.={}();", range(EMB_UND, EMB_SEMI + 1), strict=True):
         tok_emb[ord(char), dst_col] = 1
     tok_emb[[ord("|"), ord("&")], EMB_LOGIC] = 1
     tok_emb[[ord("'"), ord('"'), ord("`")], EMB_ANY_QUOTE] = 1
-    for char, dst_col in zip('"\'\\#-', range(EMB_DQUOTE, EMB_DASH + 1)):
+    for char, dst_col in zip('"\'\\#-', range(EMB_DQUOTE, EMB_DASH + 1), strict=True):
         tok_emb[ord(char), dst_col] = 1
     tok_emb[[ord("&"), ord("<")], EMB_LIFE_PFX] = 1
     tok_emb[[ord("`"), ord("!"), ord("%")], [EMB_BQUOTE, EMB_BANG, EMB_PERCENT]] = 1
@@ -522,33 +541,16 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
     )
     for min_col, dst_col in col_thresholds:
         col_emb[col_idx >= min_col, dst_col] = 1
-    trit_mats["tok_emb"], trit_mats["col_emb"] = tok_emb, col_emb
+    return tok_emb, col_emb
 
-    pre_w, pre_s, pre_b = _build_block0_preconv()
-    trit_mats["pre_conv3_w"] = pre_w
-    vecs_1d["pre_conv3_s"], vecs_1d["pre_conv3_b"] = pre_s, pre_b
 
-    off_pre = N_EMB
-    off_pref1 = N_EMB + N_PRE
-    pref1 = np.zeros((off_pref1, N_PREF1), dtype=np.int8)
-    pref1[EMB_NONSPACE, C1_NONSPACE] = 1
-    pref1[off_pre + PRE_DQUOTE, C1_DQUOTES] = 1
-    pref1[[off_pre + PRE_SQUOTE, off_pre + PRE_APOSTROPHE], C1_SQUOTES] = [1, -1]
-    pref1[off_pre + PRE_BLOCK_OPEN, C1_BLOCK_OPENS] = 1
-    pref1[[off_pre + PRE_BQUOTE, off_pre + PRE_QUOTED_BQUOTE], C1_BQUOTES] = [1, -1]
-    pref1[[off_pre + PRE_SP_BANG2, off_pre + PRE_BANG2_ABORT], C1_SP_BANG2] = [1, -1]
-    line_comm = [
-        off_pre + PRE_SLASH_COMM, off_pre + PRE_HASH_COMM,
-        off_pre + PRE_HASH2_COMM, off_pre + PRE_DASH_COMM,
-    ]
-    mid_comm = [*line_comm, off_pre + PRE_BANG_DOC]
-    pref1[mid_comm, C1_MID_COMM] = 1
-    pref1[[off_pre + PRE_BLOCK_OPEN, off_pre + PRE_BLOCK_CLOSE], C1_IN_BCOMM] = [1, -1]
-    trit_mats["pref1_proj"] = pref1
-    trit_mats["W_causal1"] = np.tril(np.ones((MAX_COLS, MAX_COLS), dtype=np.int8), k=-1)
-    trit_mats["W_causal2"] = np.tril(np.ones((MAX_COLS, MAX_COLS), dtype=np.int8), k=0)
-
-    # Gate layer with De Morgan /*-paired */ closer, polyglot comments, and 32-quote sawtooths
+def _build_block0_gates(
+    off_pre: int,
+    off_pref1: int,
+    line_comm: list[int],
+    mid_comm: list[int],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compile De Morgan /*-paired */ closer, polyglot comment, and 32-quote sawtooth gates."""
     gate1_w = np.zeros((off_pref1 + N_PREF1, N_GATE1), dtype=np.int8)
     gate1_s = np.ones((N_GATE1,), dtype=np.float32)
     gate1_b = np.zeros((N_GATE1,), dtype=np.float32)
@@ -610,32 +612,16 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
         gate1_w[off_pref1 + c1_src, [hi_g, lo_g]] = 1
         gate1_s[[hi_g, lo_g]] = 2.0
         gate1_b[[hi_g, lo_g]] = [0.0, -2.0]
-    trit_mats["gate1_w"] = gate1_w
-    vecs_1d["gate1_s"], vecs_1d["gate1_b"] = gate1_s, gate1_b
+    return gate1_w, gate1_s, gate1_b
 
-    saw_trits = np.array([1] + [-1, 1] * (N_QSAW // 2 - 1) + [-1], dtype=np.int8)
-    pref2 = np.zeros((N_GATE1, N_PREF2), dtype=np.int8)
-    pref2_s = np.ones((N_PREF2,), dtype=np.float32)
-    extra_sl = [G1_BANG_LEAD, G1_PCT_COMM, G1_VB_COMM]
-    for dst_c2 in (C2_IN_COMMENT, C2_IN_COMM_B, C2_IN_COMM_C):
-        pref2[[G1_DOC_STAR, G1_ANY_COMM_START, G1_CLOSE_HI, G1_CLOSE_LO], dst_c2] = [1, 1, -1, 1]
-        pref2[[*extra_sl, G1_BANG2_COMM], dst_c2] = 1
-    pref2[[G1_LINE_COMM_START, *extra_sl], C2_IN_LINE_COMM] = 1
-    pref2[G1_ZIG_RAW, C2_IN_RAW_LINE] = 1
 
-    pref2[[G1_ACTIVE, G1_ACT_B], C2_EFF_LEN] = 1
-    for saw_base in (G1_DQUOTE_SAW, G1_SQUOTE_SAW, G1_BQUOTE_SAW):
-        pref2[saw_base : saw_base + N_QSAW, C2_EFF_LEN] = -saw_trits
-    pref2[[G1_MC_HI, G1_MC_LO, G1_BC_HI, G1_BC_LO, G1_B2_HI, G1_B2_LO], C2_EFF_LEN] = [
-        -1, 1, -1, 1, -1, 1,
-    ]
-    pref2[[G1_DOC_STAR, *extra_sl, G1_ZIG_RAW], C2_LEAD_VETO] = 1
-    pref2_s[C2_LEAD_VETO] = float(2 * MAX_COLS)
-    trit_mats["pref2_proj"], vecs_1d["pref2_proj_s"] = pref2, pref2_s
-
-    # Fuse [emb, pre_conv3, gate1, c2] into 54 per-cell HC_* channels in {-1, 0, +1}
-    off_gate1 = off_pref1
-    off_pref2 = off_gate1 + N_GATE1
+def _build_col_fuse(
+    off_pre: int,
+    off_gate1: int,
+    off_pref2: int,
+    saw_trits: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fuse [emb, pre_conv3, gate1, c2] into 54 per-cell HC_* channels in {-1, 0, +1}."""
     fuse_w = np.zeros((off_pref2 + N_PREF2, N_HC), dtype=np.int8)
     fuse_s = np.ones((N_HC,), dtype=np.float32)
     fuse_b = np.zeros((N_HC,), dtype=np.float32)
@@ -702,6 +688,62 @@ def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarra
     fuse_s[HC_SK_VETO] = 120.0
     fuse_w[[EMB_ACTIVE, in_line_comm], HC_SL_BOOST] = 1
     fuse_s[HC_SL_BOOST], fuse_b[HC_SL_BOOST] = 40.0, -40.0
+    return fuse_w, fuse_s, fuse_b
+
+
+def _build_block0(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarray]) -> None:
+    """Compile {-1, 0, +1} byte/column embeddings and quote/comment masking circuits."""
+    trit_mats["tok_emb"], trit_mats["col_emb"] = _build_embeddings()
+    pre_w, pre_s, pre_b = _build_block0_preconv()
+    trit_mats["pre_conv3_w"] = pre_w
+    vecs_1d["pre_conv3_s"], vecs_1d["pre_conv3_b"] = pre_s, pre_b
+
+    off_pre = N_EMB
+    off_pref1 = N_EMB + N_PRE
+    pref1 = np.zeros((off_pref1, N_PREF1), dtype=np.int8)
+    pref1[EMB_NONSPACE, C1_NONSPACE] = 1
+    pref1[off_pre + PRE_DQUOTE, C1_DQUOTES] = 1
+    pref1[[off_pre + PRE_SQUOTE, off_pre + PRE_APOSTROPHE], C1_SQUOTES] = [1, -1]
+    pref1[off_pre + PRE_BLOCK_OPEN, C1_BLOCK_OPENS] = 1
+    pref1[[off_pre + PRE_BQUOTE, off_pre + PRE_QUOTED_BQUOTE], C1_BQUOTES] = [1, -1]
+    pref1[[off_pre + PRE_SP_BANG2, off_pre + PRE_BANG2_ABORT], C1_SP_BANG2] = [1, -1]
+    line_comm = [
+        off_pre + PRE_SLASH_COMM, off_pre + PRE_HASH_COMM,
+        off_pre + PRE_HASH2_COMM, off_pre + PRE_DASH_COMM,
+    ]
+    mid_comm = [*line_comm, off_pre + PRE_BANG_DOC]
+    pref1[mid_comm, C1_MID_COMM] = 1
+    pref1[[off_pre + PRE_BLOCK_OPEN, off_pre + PRE_BLOCK_CLOSE], C1_IN_BCOMM] = [1, -1]
+    trit_mats["pref1_proj"] = pref1
+    trit_mats["W_causal1"] = np.tril(np.ones((MAX_COLS, MAX_COLS), dtype=np.int8), k=-1)
+    trit_mats["W_causal2"] = np.tril(np.ones((MAX_COLS, MAX_COLS), dtype=np.int8), k=0)
+
+    gate1_w, gate1_s, gate1_b = _build_block0_gates(off_pre, off_pref1, line_comm, mid_comm)
+    trit_mats["gate1_w"] = gate1_w
+    vecs_1d["gate1_s"], vecs_1d["gate1_b"] = gate1_s, gate1_b
+
+    saw_trits = np.array([1] + [-1, 1] * (N_QSAW // 2 - 1) + [-1], dtype=np.int8)
+    pref2 = np.zeros((N_GATE1, N_PREF2), dtype=np.int8)
+    pref2_s = np.ones((N_PREF2,), dtype=np.float32)
+    extra_sl = [G1_BANG_LEAD, G1_PCT_COMM, G1_VB_COMM]
+    for dst_c2 in (C2_IN_COMMENT, C2_IN_COMM_B, C2_IN_COMM_C):
+        pref2[[G1_DOC_STAR, G1_ANY_COMM_START, G1_CLOSE_HI, G1_CLOSE_LO], dst_c2] = [1, 1, -1, 1]
+        pref2[[*extra_sl, G1_BANG2_COMM], dst_c2] = 1
+    pref2[[G1_LINE_COMM_START, *extra_sl], C2_IN_LINE_COMM] = 1
+    pref2[G1_ZIG_RAW, C2_IN_RAW_LINE] = 1
+
+    pref2[[G1_ACTIVE, G1_ACT_B], C2_EFF_LEN] = 1
+    for saw_base in (G1_DQUOTE_SAW, G1_SQUOTE_SAW, G1_BQUOTE_SAW):
+        pref2[saw_base : saw_base + N_QSAW, C2_EFF_LEN] = -saw_trits
+    pref2[[G1_MC_HI, G1_MC_LO, G1_BC_HI, G1_BC_LO, G1_B2_HI, G1_B2_LO], C2_EFF_LEN] = [
+        -1, 1, -1, 1, -1, 1,
+    ]
+    pref2[[G1_DOC_STAR, *extra_sl, G1_ZIG_RAW], C2_LEAD_VETO] = 1
+    pref2_s[C2_LEAD_VETO] = float(2 * MAX_COLS)
+    trit_mats["pref2_proj"], vecs_1d["pref2_proj_s"] = pref2, pref2_s
+
+    off_pref2 = off_pref1 + N_GATE1
+    fuse_w, fuse_s, fuse_b = _build_col_fuse(off_pre, off_pref1, off_pref2, saw_trits)
     trit_mats["col_fuse_w"] = fuse_w
     vecs_1d["col_fuse_s"], vecs_1d["col_fuse_b"] = fuse_s, fuse_b
 
@@ -835,7 +877,6 @@ _DECL_TYPE_DDL = (
     "public stati", "private stat",
 )
 
-# Track 3 structural-friction k=7 & k=13 code patterns
 _K7_FRICTION = (
     ("do ", 1, 0, 0, 1), ("until ", 1, 0, 1, 1), (".each ", 0, 0, 1, 0),
     (".each{", 0, 0, 1, 0), ("_each ", 0, 0, 1, 0), ("elsif ", 1, 0, 1, 0),
@@ -1097,25 +1138,14 @@ def _stamp_friction_convs(
         feat[pat] = off_c13 + ch_i
 
 
-def _build_block1(
-    trit_mats: dict[str, np.ndarray],
-    vecs_1d: dict[str, np.ndarray],
-) -> dict[str, int]:
-    """Compile {-1, 0, +1} k=3/7/13 convolutions, SimHash bank, and line-feature MLP."""
-    feat: dict[str, int] = {}
-    n_csum, n_conv3, n_conv7, n_conv13 = len(_CSUM_SPECS), 84, 268, 236
-    off_c3 = n_csum
-    off_c7 = off_c3 + n_conv3
-    off_c13 = off_c7 + n_conv7
+LineRule = tuple[list[tuple[str, float]], float, int, float]
+ConvBankSpec = tuple[int, int, np.ndarray, np.ndarray, np.ndarray, list[int]]
 
-    csum_w = np.zeros((N_HC, n_csum), dtype=np.int8)
-    csum_s = np.ones((n_csum,), dtype=np.float32)
-    for idx, (name, hc_col, scale) in enumerate(_CSUM_SPECS):
-        csum_w[hc_col, idx] = 1
-        csum_s[idx] = scale
-        feat[name] = idx
-    trit_mats["col_sum_proj"], vecs_1d["col_sum_s"] = csum_w, csum_s
 
+def _build_conv3_bank(
+    n_conv3: int, off_c3: int, feat: dict[str, int]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Compile k=3 lexical, operator, parenthesis, and block-comment filters."""
     conv3_w = np.zeros((3, N_HC, n_conv3), dtype=np.int8)
     conv3_s = np.ones((n_conv3,), dtype=np.float32)
     conv3_b = np.zeros((n_conv3,), dtype=np.float32)
@@ -1138,8 +1168,7 @@ def _build_block1(
     ):
         feat[name] = off_c3 + ch_i
 
-    k3_code_pats = ("?.", "=>", "===", "{}", "||", "#", "??=")
-    for ch_i, pat in enumerate(k3_code_pats, 5):
+    for ch_i, pat in enumerate(("?.", "=>", "===", "{}", "||", "#", "??="), 5):
         _sub_filter(conv3_w, conv3_s, conv3_b, ch_i, pat)
         feat[pat] = off_c3 + ch_i
 
@@ -1182,8 +1211,7 @@ def _build_block1(
     for ch_i, name in enumerate(custom_c3_names, 20):
         feat[name] = off_c3 + ch_i
 
-    k3_comm_pats = ("///", "//!", "===", "=>", "){", ") {", " = ")
-    for ch_i, pat in enumerate(k3_comm_pats, 25):
+    for ch_i, pat in enumerate(("///", "//!", "===", "=>", "){", ") {", " = "), 25):
         _sub_filter(conv3_w, conv3_s, conv3_b, ch_i, pat, code=False, comm=True)
         feat[f"c:{pat}"] = off_c3 + ch_i
 
@@ -1214,14 +1242,18 @@ def _build_block1(
     for ch_i, pat in enumerate(_K3_TERNARY_VETO, 37):
         _sub_filter(conv3_w, conv3_s, conv3_b, ch_i, pat)
         feat[pat] = off_c3 + ch_i
-    c3_next = 37 + len(_K3_TERNARY_VETO)
+    return conv3_w, conv3_s, conv3_b, 37 + len(_K3_TERNARY_VETO)
 
+
+def _build_conv7_bank(
+    n_conv7: int, off_c7: int, feat: dict[str, int]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Compile k=7 keyword, comment-cue, short-golf, triple-quote, and member-veto filters."""
     conv7_w = np.zeros((7, N_HC, n_conv7), dtype=np.int8)
     conv7_s = np.ones((n_conv7,), dtype=np.float32)
     conv7_b = np.zeros((n_conv7,), dtype=np.float32)
     str_bearing = {"|| '')", "strict'"}
-    k7_groups = ((0, _K7_PRIMARY), (60, _K7_EXTENDED), (85, _K7_V04_CODE))
-    for start_ch, group in k7_groups:
+    for start_ch, group in ((0, _K7_PRIMARY), (60, _K7_EXTENDED), (85, _K7_V04_CODE)):
         for offset, (pat, wl, wr, cs, ld) in enumerate(group):
             ch_i = start_ch + offset
             _sub_filter(
@@ -1319,8 +1351,13 @@ def _build_block1(
     ch_pcall_stmt = c7_v06 + len(_K7_V06_CODE)
     _sub_filter(conv7_w, conv7_s, conv7_b, ch_pcall_stmt, "pcall(", wl=1, cs=1, lead=1)
     feat["pcall_stmt"] = off_c7 + ch_pcall_stmt
-    c7_next = ch_pcall_stmt + 1
+    return conv7_w, conv7_s, conv7_b, ch_pcall_stmt + 1
 
+
+def _build_conv13_bank(
+    n_conv13: int, off_c13: int, feat: dict[str, int]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Compile k=13 identifier-length, ceremony, stdlib, test, and polyglot filters."""
     conv13_w = np.zeros((13, N_HC, n_conv13), dtype=np.int8)
     conv13_s = np.ones((n_conv13,), dtype=np.float32)
     conv13_b = np.zeros((n_conv13,), dtype=np.float32)
@@ -1378,18 +1415,11 @@ def _build_block1(
         if pat == "return false":
             conv13_w[12, HC_SEM, ch_i] = -1
         feat[pat] = off_c13 + ch_i
-    c13_next = 83 + len(_K13_V06_CODE)
+    return conv13_w, conv13_s, conv13_b, 83 + len(_K13_V06_CODE)
 
-    _stamp_friction_convs(
-        conv3_w, conv3_s, conv3_b, conv7_w, conv7_s, conv7_b,
-        conv13_w, conv13_s, conv13_b, feat,
-        (off_c3, off_c7, off_c13), (c3_next, c7_next, c13_next),
-    )
 
-    num_raw_u = n_csum + n_conv3 + n_conv7 + n_conv13
-    _build_multiline_gates(trit_mats, vecs_1d, feat, num_raw_u)
-
-    # Declarative line-level rules compiled into strictly {-1, 0, +1} lmlp1_w & lmlp2_w
+def _build_core_line_rules() -> list[LineRule]:
+    """Build declarative line-level feature rules for Z[0..39] and container registers."""
     module_headers = [
         ("from ", -3.0), ("use ", -3.0), ("import ", -3.0),
         ("package ", -3.0), ("#include", -3.0),
@@ -1398,7 +1428,8 @@ def _build_block1(
     type_field_veto = [
         (": string", -1.0), (": number", -1.0), (": boolean", -1.0),
         ("typed_arr", -1.0), ("param_pascal", -1.0),
-    ] + [(pat, -2.0) for pat in _DECL_TYPE_DDL]
+        *((pat, -2.0) for pat in _DECL_TYPE_DDL),
+    ]
     hardcoded_branch_terms = [
         ("if", 1.5), ("elseif ", 1.5), ("return", 1.0), ("== '", 1.5), ('== "', 1.5),
         ("===_digit", 1.5), ("== -1", 1.5), ("||", -2.5), ("typeof", -2.5),
@@ -1422,13 +1453,14 @@ def _build_block1(
     stmt_terms = [
         ("semi_or_eq", 1.0), ("func_call", 1.0), ("return", 1.0),
         ("throw", 1.0), ("raise", 1.0),
-    ] + module_headers + type_field_veto
+        *module_headers, *type_field_veto,
+    ]
     imperative_terms = [
         ("code_chars", 0.05), ("semi_or_eq", 0.65), ("func_call", 0.65),
         ("indent_cols", 0.25), ("ERR_", -3.0), ("Prototype", -3.0),
         ("require", -3.0), ("exports", -3.0), ("return", -0.8),
-        ("throw", -0.8), ("raise", -0.8),
-    ] + module_headers
+        ("throw", -0.8), ("raise", -0.8), *module_headers,
+    ]
 
     member_1ch_vetoes = [
         ("arrow_1ch", -1.0), ("pct_rhs_1ch", -1.0),
@@ -1437,7 +1469,8 @@ def _build_block1(
     one_char_terms = [
         ("one_char_id", 1.0), ("bracket_1ch", -1.0),
         ("for", -2.0), ("for (", -1.5), ("For ", -2.0),
-    ] + member_1ch_vetoes
+        *member_1ch_vetoes,
+    ]
     short_golf_terms = [
         ("short_lhs", 1.6), ("decl_short_lhs", 1.6), ("one_char_id", 0.5),
         ("bracket_1ch", -0.5), ("for", -1.0), ("for (", -0.8), ("For ", -1.0),
@@ -1452,7 +1485,8 @@ def _build_block1(
         (" as any", 1.8), ("as unknown", 1.8), ("cast(Any", 1.8),
         ("c:pyright: ign", 1.8), ("c:biome-ignore", 1.8),
         ("_ = try?", 2.0), ("try? ", 2.0), ("pcall_stmt", 2.0),
-    ] + [(pat, 1.8) for pat in _K13_BROAD_SUPPRESS]
+        *((pat, 1.8) for pat in _K13_BROAD_SUPPRESS),
+    ]
     or_coll_guard = float(MAX_COLS // 2)
     or_coll_terms = [
         (" or []", or_coll_guard), (" or {}", or_coll_guard),
@@ -1476,11 +1510,25 @@ def _build_block1(
     test_decl_terms = [(pat, -3.0) for pat in (*_K13_TEST_DECLS, _K7_TEST_METHOD)]
     # Empty `{}` only signals a swallowed error beside `catch`; a line holds at most 64 pairs
     catch_gate = float(MAX_COLS // 2)
-    pure_comment_terms = [("comment_chars", 1.0), ("code_chars", -5.0)] + [
-        (f"c:{pat}", -float(MAX_COLS)) for pat in _K7_DIRECTIVE_COMM
+    pure_comment_terms = [
+        ("comment_chars", 1.0),
+        ("code_chars", -5.0),
+        *((f"c:{pat}", -float(MAX_COLS)) for pat in _K7_DIRECTIVE_COMM),
+    ]
+    brace_net_terms = [("open_braces", 1.0), ("close_braces", 1.0), ("code_chars", -0.4)]
+    deep_pyr_terms = [("depth_ge16", 0.35), ("depth_ge20", 1.25), ("depth_ge24", 0.8)]
+    switch_terms = [("switch", 2.0), ("match", 2.0), ("case ", 1.5), ("break", 1.5)]
+    impl_ceremony_terms = [("Impl", 1.0), *test_decl_terms]
+    long_ident_terms = [
+        ("ident_13ch", 0.11),
+        *((key, -wt * 0.25) for key, wt in stdlib_idiom_terms),
+        *test_decl_terms,
+        *module_headers,
     ]
 
-    line_rules: list[tuple[list[tuple[str, float]], float, int, float]] = [
+    mod_hdr_terms = [*((name, 1.0) for name, _ in module_headers), *decl_hdr_terms]
+
+    return [
         ([("has_nonspace", 1.0)], 0.0, Z_ACTIVE, 1.0),
         ([("code_chars", 1.0)], 0.0, Z_HAS_CODE, 1.0),
         ([("code_chars", 1.0)], -1.0, Z_HAS_CODE, -1.0),
@@ -1493,8 +1541,8 @@ def _build_block1(
         ([("comment_mask", 1.0), ("code_chars", -5.0)], -3.0, Z_PARAGRAPH_BREAK, -1.0),
         ([("has_nonspace", -1.0)], 1.0, Z_PARAGRAPH_BREAK, 1.0),
         ([(pat, 1.0) for pat in _DECL_TYPE_DDL], 0.0, Z_PARAGRAPH_BREAK, 1.0),
-        ([("open_braces", 1.0), ("close_braces", 1.0), ("code_chars", -0.4)], 0.2, Z_OPEN_NET, 1.0),
-        ([("open_braces", 1.0), ("close_braces", 1.0), ("code_chars", -0.4)], -0.8, Z_OPEN_NET, -1.0),
+        (brace_net_terms, 0.2, Z_OPEN_NET, 1.0),
+        (brace_net_terms, -0.8, Z_OPEN_NET, -1.0),
 
         ([("indent_cols", 1.0)], 0.0, Z_INDENT, 1.0),
         ([("depth_ge8", 1.0)], 0.0, Z_DEPTH8, 1.0),
@@ -1503,10 +1551,10 @@ def _build_block1(
         ([("odd_indent", 1.0)], 0.0, Z_ODD_INDENT, 1.0),
         ([("mod4_eq2_indent", 1.0)], 0.0, Z_MOD4_EQ2, 1.0),
         ([("mod4_eq0_indent", 1.0)], 0.0, Z_MOD4_EQ0, 1.0),
-        ([("depth_ge16", 0.35), ("depth_ge20", 1.25), ("depth_ge24", 0.8)], 0.0, Z_DEEP_PYRAMID, 1.0),
+        (deep_pyr_terms, 0.0, Z_DEEP_PYRAMID, 1.0),
         ([("depth_ge24", 1.7)], 0.0, Z_PYR_CLASS, 1.0),
         ([("depth_ge16", -1.0)], 1.0, Z_SHALLOW_LINE, 1.0),
-        ([(name, 1.0) for name, _ in module_headers] + decl_hdr_terms, 0.0, Z_MODULE_HEADER, 1.0),
+        (mod_hdr_terms, 0.0, Z_MODULE_HEADER, 1.0),
 
         ([("if", 1.0), ("else if", -1.0), ("} else if", -1.0), ("elseif ", -1.0),
           ("for", 0.8), ("For ", 0.8), ("while", 0.8), ("match", 0.8)],
@@ -1518,14 +1566,13 @@ def _build_block1(
           ("raise", 1.0), ("depth_ge16", -2.5)], -1.5, Z_GUARD_CLAUSE, 2.0),
         (hardcoded_branch_terms, -3.2, Z_HARDCODED_CASE, 1.0),
         (hardcoded_branch_terms, -4.2, Z_HARDCODED_CASE, -1.0),
-        ([("switch", 2.0), ("match", 2.0), ("case ", 1.5), ("break", 1.5)], 0.0, Z_SWITCH_BLOCK, 1.0),
+        (switch_terms, 0.0, Z_SWITCH_BLOCK, 1.0),
 
-        (ceremony_terms + test_decl_terms, 0.0, Z_CEREMONY, 1.0),
-        ([("Impl", 1.0)] + test_decl_terms, 0.0, Z_CEREMONY, 1.1),
-        ([("Impl", 1.0)] + test_decl_terms, -1.0, Z_CEREMONY, -1.1),
+        ([*ceremony_terms, *test_decl_terms], 0.0, Z_CEREMONY, 1.0),
+        (impl_ceremony_terms, 0.0, Z_CEREMONY, 1.1),
+        (impl_ceremony_terms, -1.0, Z_CEREMONY, -1.1),
         (stdlib_idiom_terms, 0.0, Z_STDLIB_IDIOM, 1.0),
-        ([("ident_13ch", 0.11)] + [(key, -wt * 0.25) for key, wt in stdlib_idiom_terms]
-         + test_decl_terms + module_headers, -1.05, Z_LONG_IDENT, 1.0),
+        (long_ident_terms, -1.05, Z_LONG_IDENT, 1.0),
         (one_char_terms, 0.0, Z_ONE_CHAR_ID, 1.0),
         (one_char_terms, -1.0, Z_CRYPTIC_GATE, 1.0),
         (one_char_terms, -2.0, Z_CRYPTIC_GATE, -1.0),
@@ -1572,6 +1619,9 @@ def _build_block1(
         (container_hdr_terms, -1.0, Z_CONTAINER_HDR, -1.0),
     ]
 
+
+def _build_indicator_and_polyglot_rules() -> list[LineRule]:
+    """Build [0, 1] static-slop indicators (Z[113..132]) and polyglot error rules (Z[160..167])."""
     sig_open_pats = (
         "function ", "def ", "fn ", "subroutine ", "=>", "func_call", "): ", ") ->",
     )
@@ -1633,23 +1683,24 @@ def _build_block1(
         (("c: = ",), Z_COMM_ASSIGN),
         (("comm_fcall",), Z_COMM_FCALL),
     )
+
+    rules: list[LineRule] = []
     for pat_names, dst_reg in clamped_indicators:
         unit_terms = [(key, 1.0) for key in pat_names]
-        line_rules.append((unit_terms, 0.0, dst_reg, 1.0))
-        line_rules.append((unit_terms, -1.0, dst_reg, -1.0))
+        rules.append((unit_terms, 0.0, dst_reg, 1.0))
+        rules.append((unit_terms, -1.0, dst_reg, -1.0))
 
     two_env_terms = [(key, 1.0) for key in env_lookup_pats]
-    line_rules.append((two_env_terms, -1.0, Z_TWO_ENVS, 1.0))
-    line_rules.append((two_env_terms, -2.0, Z_TWO_ENVS, -1.0))
+    rules.append((two_env_terms, -1.0, Z_TWO_ENVS, 1.0))
+    rules.append((two_env_terms, -2.0, Z_TWO_ENVS, -1.0))
 
-    # Track 2 polyglot line-level rules (Z[160..167])
     math_terms = [(key, 1.0) for key in math_sig_pats]
     lua_ok_gate = 16.0
     lua_and_or_terms = [
         ("ok and ", lua_ok_gate), (" or 0", 1.0), (" or nil", 1.0), (" or false", 1.0),
         (" or {}", 1.0), (" or []", 1.0), (" or {})", -2.0), ("type(", -2.0),
     ]
-    line_rules.extend([
+    rules.extend([
         (math_terms, 0.0, Z_MATH_SIG, 0.36),
         (math_terms, -1.0, Z_MATH_SIG, -0.36),
         ([("runCatching", 1.0)], 0.0, Z_KT_RUNCATCH, 1.0),
@@ -1672,28 +1723,33 @@ def _build_block1(
         ([("pcall(", 1.0)], 0.0, Z_LUA_PCALL, 1.0),
         ([("pcall(", 1.0)], -1.0, Z_LUA_PCALL, -1.0),
     ])
+    return rules
 
-    # Track 3 structural-friction line-level rules (Z[168..179])
+
+def _build_friction_line_rules() -> list[LineRule]:
+    """Build structural-friction line rules (Z[168..180], Z_BRANCH_CLOSE, Z_SIG_OPEN_PAREN)."""
+    module_headers = [
+        ("from ", -3.0), ("use ", -3.0), ("import ", -3.0),
+        ("package ", -3.0), ("#include", -3.0),
+    ]
     decl_veto = [
         ("my ", -3.0), ("let ", -3.0), ("var ", -3.0),
         ("local ", -3.0), ("const ", -3.0), ("for", -5.0),
     ]
-    # Non-monotonic / multi-step / embedded cursor mutations vs unit +1 steps
     cursor_mut_pats = (
         "pos = last ", "cursor -=", "cursor++", "++cursor", "$cursor = ",
         "idx -= ", "idx++", "++idx", "pos -= ", "stop -= 1", "tup_idx_inc",
     )
-    cursor_terms = [(pat, 2.0) for pat in cursor_mut_pats] + decl_veto
-    # Also fire when a named cursor/idx/pos jumps by += 2 or += 4 on the same line
+    cursor_terms = [*((pat, 2.0) for pat in cursor_mut_pats), *decl_veto]
     jump_step_terms = [
         ("cursor +=", 1.0), ("$cursor +=", 1.0), ("idx += ", 1.0), ("pos += ", 1.0),
-        ("i += 2", 2.0), ("+= 2", 1.0), ("+= 4", 1.0),
-    ] + decl_veto
+        ("i += 2", 2.0), ("+= 2", 1.0), ("+= 4", 1.0), *decl_veto,
+    ]
     generic_cur_pats = (
         "i = i + 1", "j = j + 1", "idx = idx +", "pos = pos +",
         "cursor +=", "$cursor +=", "idx += ", "pos += ", "i += 1",
     )
-    generic_cur_terms = [(pat, 2.0) for pat in generic_cur_pats] + decl_veto
+    generic_cur_terms = [*((pat, 2.0) for pat in generic_cur_pats), *decl_veto]
     loop_hdr_pats = (
         "for", "while", "do while", "do ", "bare_do",
         "until ", ".each ", ".each{", "_each ",
@@ -1715,7 +1771,7 @@ def _build_block1(
         "return", "call ", "throw", "raise", "=>",
         "let ", "var ", "const ", "local ", "depth_ge12",
     )
-    sig_cand_terms = sig_pos_terms + [(pat, -5.0) for pat in sig_neg_pats]
+    sig_cand_terms = [*sig_pos_terms, *((pat, -5.0) for pat in sig_neg_pats)]
     bool_flag_pats = (
         "bool ", ": bool", ": boolean", "= true",
         "= false", "logical", "$skip", "$omit",
@@ -1725,28 +1781,29 @@ def _build_block1(
         "intent(out)", "intent(inou", "ByRef ", "$warnings",
         "ptr_lead_id", "ptr_trail_id", "ref_lead_id", "ref_trail_id",
     )
-    out_ref_terms = [(pat, 1.0) for pat in out_ref_pats] + [("const ", -1.0)]
+    out_ref_terms = [*((pat, 1.0) for pat in out_ref_pats), ("const ", -1.0)]
     skel_imp_terms = [
         ("code_chars", 0.05), ("semi_or_eq", 0.75), ("func_call", 0.75),
         ("indent_cols", 0.30), ("yield ", 1.5), ("return", -1.2),
         ("throw", -1.5), ("raise", -1.5), ("def ", -3.0),
         ("function ", -3.0), ("func ", -3.0), ("sub ", -3.0), ("subroutine ", -3.0),
         ("const ", -2.5), ("let ", -2.5), ("var ", -2.5), ("for", -2.5),
-    ] + module_headers
+        *module_headers,
+    ]
     mut_stmt_pats = (
         " += ", " -= ", " << ", "push ", ".append(", "{end+1}",
         "= .true.", "= true", "break", "continue", "cycle", "next ",
         "++", "^=", "|=",
     )
-    deep_reassign_terms = [(" = ", 1.0), ("indent_cols", 0.20)] + decl_veto
+    deep_reassign_terms = [(" = ", 1.0), ("indent_cols", 0.20), *decl_veto]
     branch_close_terms = [
         ("close_braces", 1.0), ("open_braces", -2.0),
         ("end if", 1.0), ("end select", 1.0),
         ("continue", 1.0), ("break", 1.0), ("return", 1.0),
     ]
-    sig_open_paren_terms = sig_cand_terms + [("code_lparen", 10.0), ("code_rparen", -10.0)]
+    sig_open_paren_terms = [*sig_cand_terms, ("code_lparen", 10.0), ("code_rparen", -10.0)]
 
-    line_rules.extend([
+    return [
         (cursor_terms, -1.0, Z_CURSOR_MUT, 1.0),
         (cursor_terms, -2.0, Z_CURSOR_MUT, -1.0),
         (jump_step_terms, -1.5, Z_CURSOR_MUT, 2.0),
@@ -1776,110 +1833,76 @@ def _build_block1(
         ([(pat, 1.0) for pat in mut_stmt_pats], -1.0, Z_MUT_STMT, -1.0),
         (deep_reassign_terms, -1.3, Z_MUT_STMT, 2.0),
         (deep_reassign_terms, -1.8, Z_MUT_STMT, -2.0),
-    ])
+    ]
 
-    free_narrow = [slot for slot in range(n_conv3) if not np.any(conv3_w[:, :, slot])]
-    free_medium = [slot for slot in range(n_conv7) if not np.any(conv7_w[:, :, slot])]
-    free_wide = [slot for slot in range(n_conv13) if not np.any(conv13_w[:, :, slot])]
-    scaled_cache: dict[tuple[int, float], int] = {}
-    conv_banks = (
-        (off_c7, off_c3, conv3_w, conv3_s, conv3_b, free_narrow),
-        (off_c13, off_c7, conv7_w, conv7_s, conv7_b, free_medium),
-        (10**9, off_c13, conv13_w, conv13_s, conv13_b, free_wide),
-    )
 
-    def rescale_conv_in_place(base_idx: int, mult: float) -> None:
-        for upper_off, bank_off, _, s_arr, b_arr, _ in conv_banks:
-            if base_idx < upper_off:
-                s_arr[base_idx - bank_off] *= mult
-                b_arr[base_idx - bank_off] *= mult
-                return
+def _rescale_conv_in_place(
+    base_idx: int, mult: float, conv_banks: tuple[ConvBankSpec, ...]
+) -> None:
+    for upper_off, bank_off, _, s_arr, b_arr, _ in conv_banks:
+        if base_idx < upper_off:
+            s_arr[base_idx - bank_off] *= mult
+            b_arr[base_idx - bank_off] *= mult
+            return
 
-    def clone_scaled_feat(base_idx: int, mult: float) -> int:
-        if abs(mult - 1.0) < 1e-7:
-            return base_idx
-        cache_key = (base_idx, round(mult, 6))
-        if cache_key in scaled_cache:
-            return scaled_cache[cache_key]
-        if base_idx < off_c3:
-            dst = free_narrow.pop(0)
-            hc_col = int(np.argmax(csum_w[:, base_idx]))
-            conv3_w[1, hc_col, dst] = 1
-            conv3_s[dst] = csum_s[base_idx] * mult
-            out_idx = off_c3 + dst
-        else:
-            out_idx = -1
-            for upper_off, bank_off, w_arr, s_arr, b_arr, pool in conv_banks:
-                if base_idx >= upper_off:
-                    continue
-                src = base_idx - bank_off
-                if pool:
-                    dst = pool.pop(0)
-                    w_arr[:, :, dst] = w_arr[:, :, src]
-                    s_arr[dst], b_arr[dst] = s_arr[src] * mult, b_arr[src] * mult
-                    out_idx = bank_off + dst
-                else:
-                    dst = free_wide.pop(0)
-                    conv13_w[3:10, :, dst] = conv7_w[:, :, src]
-                    conv13_s[dst], conv13_b[dst] = s_arr[src] * mult, b_arr[src] * mult
-                    out_idx = off_c13 + dst
-                break
-        scaled_cache[cache_key] = out_idx
-        return out_idx
 
-    num_u = num_raw_u + N_ML_GATE + N_PAREN_SUF + N_PREV_LINE
-    n_lm1 = 224
-    lm1_w = np.zeros((num_u, n_lm1), dtype=np.int8)
-    lm1_s = np.ones((n_lm1,), dtype=np.float32)
-    lm1_b = np.zeros((n_lm1,), dtype=np.float32)
-    lm2_w = np.zeros((n_lm1, N_LMLP2), dtype=np.int8)
-    lm2_b = np.zeros((N_LMLP2,), dtype=np.float32)
+def _clone_conv_slot(
+    base_idx: int, mult: float, conv_banks: tuple[ConvBankSpec, ...]
+) -> int:
+    wide_bank = conv_banks[2]
+    for upper_off, bank_off, w_arr, s_arr, b_arr, pool in conv_banks:
+        if base_idx >= upper_off:
+            continue
+        src = base_idx - bank_off
+        if pool:
+            dst = pool.pop(0)
+            w_arr[:, :, dst] = w_arr[:, :, src]
+            s_arr[dst], b_arr[dst] = s_arr[src] * mult, b_arr[src] * mult
+            return bank_off + dst
+        dst = wide_bank[5].pop(0)
+        wide_bank[2][3:10, :, dst] = w_arr[:, :, src]
+        wide_bank[3][dst], wide_bank[4][dst] = s_arr[src] * mult, b_arr[src] * mult
+        return wide_bank[1] + dst
+    return -1
 
-    ml_protected = {
-        feat["triple_dq"], feat["triple_sq"],
-        feat["ml_bcomm_open"], feat["ml_bcomm_close"],
-        feat["code_lparen"], feat["code_rparen"],
-        feat["= @_;"], feat["intent("],
-    }
-    ref_counts: Counter[int] = Counter()
-    for terms, _, _, _ in line_rules:
-        for name, _ in terms:
-            ref_counts[feat[name]] += 1
-    rescaled_once: set[int] = set()
 
-    for unit, (terms, bias, dst_z, out_scale) in enumerate(line_rules):
-        merged: dict[int, float] = {}
-        for name, weight in terms:
-            idx = feat[name]
-            merged[idx] = merged.get(idx, 0.0) + weight
+def _clone_scaled_feat(
+    base_idx: int,
+    mult: float,
+    csum_w: np.ndarray,
+    csum_s: np.ndarray,
+    conv_banks: tuple[ConvBankSpec, ...],
+    scaled_cache: dict[tuple[int, float], int],
+) -> int:
+    if abs(mult - 1.0) < 1e-7:
+        return base_idx
+    cache_key = (base_idx, round(mult, 6))
+    if cache_key in scaled_cache:
+        return scaled_cache[cache_key]
 
-        abs_out = abs(out_scale)
-        mag_counts = Counter(round(abs(wt), 6) for wt in merged.values())
-        base_mag = max(mag_counts.items(), key=lambda pair: (pair[1], pair[0]))[0]
-        lm1_s[unit] = base_mag * abs_out
-        lm1_b[unit] = bias * abs_out
-        lm2_w[unit, dst_z] = 1 if out_scale >= 0 else -1
+    off_c3 = conv_banks[0][1]
+    if base_idx < off_c3:
+        dst = conv_banks[0][5].pop(0)
+        hc_col = int(np.argmax(csum_w[:, base_idx]))
+        conv_banks[0][2][1, hc_col, dst] = 1
+        conv_banks[0][3][dst] = csum_s[base_idx] * mult
+        out_idx = off_c3 + dst
+    else:
+        out_idx = _clone_conv_slot(base_idx, mult, conv_banks)
+    scaled_cache[cache_key] = out_idx
+    return out_idx
 
-        for base_idx, wt_val in merged.items():
-            sign_in = 1 if wt_val >= 0 else -1
-            mult = abs(wt_val) / base_mag
-            can_rescale = (
-                ref_counts[base_idx] == 1
-                and base_idx >= off_c3
-                and base_idx not in rescaled_once
-                and base_idx not in ml_protected
-            )
-            if abs(mult - 1.0) < 1e-6:
-                src_col = base_idx
-            elif can_rescale:
-                rescaled_once.add(base_idx)
-                rescale_conv_in_place(base_idx, mult)
-                src_col = base_idx
-            else:
-                src_col = clone_scaled_feat(base_idx, mult)
-            lm1_w[src_col, unit] = sign_in
 
-    # Wire cross-line docstring/comment sawtooth -> Z_IN_DOC and Dyck suffixes -> Z_IN_PAREN
+def _wire_multiline_and_helpers(
+    lm1_w: np.ndarray,
+    lm1_s: np.ndarray,
+    lm1_b: np.ndarray,
+    lm2_w: np.ndarray,
+    feat: dict[str, int],
+    num_raw_u: int,
+    base_unit: int,
+) -> tuple[int, dict[str, int]]:
+    """Wire cross-line sawtooths, Dyck parens, L-1 taps, and scaled Z[87..112] helpers."""
     dq_trits = np.array([1] + [-1, 1] * (N_DQ_SAW // 2 - 1) + [-1], dtype=np.int8)
     sq_trits = np.array([1] + [-1, 1] * (N_SQ_SAW // 2 - 1) + [-1], dtype=np.int8)
     off_dq = num_raw_u
@@ -1887,7 +1910,7 @@ def _build_block1(
     off_bc = off_sq + N_SQ_SAW
     off_ps = num_raw_u + N_ML_GATE
 
-    u_doc_hi, u_doc_lo = len(line_rules), len(line_rules) + 1
+    u_doc_hi, u_doc_lo = base_unit, base_unit + 1
     for u_doc in (u_doc_hi, u_doc_lo):
         lm1_w[off_dq : off_dq + N_DQ_SAW, u_doc] = dq_trits
         lm1_w[off_sq : off_sq + N_SQ_SAW, u_doc] = sq_trits
@@ -1896,29 +1919,29 @@ def _build_block1(
     lm1_b[[u_doc_hi, u_doc_lo]] = [0.0, -1.0]
     lm2_w[[u_doc_hi, u_doc_lo], Z_IN_DOC] = [1, -1]
 
-    u_par_hi, u_par_lo = len(line_rules) + 2, len(line_rules) + 3
+    u_par_hi, u_par_lo = base_unit + 2, base_unit + 3
     par_signs = np.tile(np.array([1, -1], dtype=np.int8), N_PAREN_STEPS)
     for u_par in (u_par_hi, u_par_lo):
         lm1_w[off_ps : off_ps + N_PAREN_SUF, u_par] = par_signs
     lm1_b[[u_par_hi, u_par_lo]] = [0.0, -1.0]
     lm2_w[[u_par_hi, u_par_lo], Z_IN_PAREN] = [1, -1]
 
-    # Indented function/method signatures also indicate class/module-indented containers
-    u_ind_fn_hi, u_ind_fn_lo = len(line_rules) + 4, len(line_rules) + 5
-    ind_fn_cols = [feat["def "], feat["function "], feat["pub "], feat["public "], feat["indent_cols"]]
+    u_ind_fn_hi, u_ind_fn_lo = base_unit + 4, base_unit + 5
+    ind_fn_cols = [
+        feat["def "], feat["function "], feat["pub "], feat["public "], feat["indent_cols"],
+    ]
     for u_ifn in (u_ind_fn_hi, u_ind_fn_lo):
         lm1_w[ind_fn_cols, u_ifn] = 1
     lm1_s[[u_ind_fn_hi, u_ind_fn_lo]] = 2.0
     lm1_b[[u_ind_fn_hi, u_ind_fn_lo]] = [-3.5, -4.5]
     lm2_w[[u_ind_fn_hi, u_ind_fn_lo], Z_CONTAINER_HDR] = [1, -1]
 
-    # Previous-line registers: comment-block continuation and `return ..., nil` under `err != nil`
     off_prev = off_ps + N_PAREN_SUF
-    u_prev_comm = len(line_rules) + 6
+    u_prev_comm = base_unit + 6
     lm1_w[[off_prev, off_prev + 1], u_prev_comm] = [1, -1]
     lm2_w[u_prev_comm, Z_PREV_COMMENT] = 1
 
-    u_nil_hi, u_nil_lo = len(line_rules) + 7, len(line_rules) + 8
+    u_nil_hi, u_nil_lo = base_unit + 7, base_unit + 8
     nil_cols = [off_prev + 2, off_prev + 3, feat["return"], feat["nil_eol"]]
     for u_nil in (u_nil_hi, u_nil_lo):
         lm1_w[nil_cols, u_nil] = [1, -1, 1, 1]
@@ -1926,16 +1949,14 @@ def _build_block1(
     lm1_b[[u_nil_hi, u_nil_lo]] = [-5.0, -6.0]
     lm2_w[[u_nil_hi, u_nil_lo], Z_NIL_SWALLOW] = [1, -1]
 
-    # Clamped [0, 1] declaration-based signature continuation (`= @_;` OR `intent(`)
-    u_sc_hi, u_sc_lo = len(line_rules) + 9, len(line_rules) + 10
+    u_sc_hi, u_sc_lo = base_unit + 9, base_unit + 10
     for u_sc in (u_sc_hi, u_sc_lo):
         lm1_w[[feat["= @_;"], feat["intent("]], u_sc] = 1
     lm1_b[[u_sc_hi, u_sc_lo]] = [0.0, -1.0]
     lm2_w[[u_sc_hi, u_sc_lo], Z_SIG_CONT] = [1, -1]
 
-    # Emit helper scaled Z[87..112] registers for exact {-1, 0, +1} cmlp1_w & doc1_w
-    active_units = list(range(len(line_rules) + 11))
-    next_unit = len(line_rules) + 11
+    active_units = list(range(base_unit + 11))
+    next_unit = base_unit + 11
     next_z = 87
     z_helpers: dict[str, int] = {}
     helper_specs = (
@@ -1977,7 +1998,110 @@ def _build_block1(
                 lm2_w[next_unit, dst_z] = lm2_w[src_u, src_z]
                 next_unit += 1
         z_helpers[key_name] = dst_z
+    return next_unit, z_helpers
 
+
+def _build_block1(
+    trit_mats: dict[str, np.ndarray],
+    vecs_1d: dict[str, np.ndarray],
+) -> dict[str, int]:
+    """Compile {-1, 0, +1} k=3/7/13 convolutions, SimHash bank, and line-feature MLP."""
+    feat: dict[str, int] = {}
+    n_csum, n_conv3, n_conv7, n_conv13 = len(_CSUM_SPECS), 84, 268, 236
+    off_c3 = n_csum
+    off_c7 = off_c3 + n_conv3
+    off_c13 = off_c7 + n_conv7
+
+    csum_w = np.zeros((N_HC, n_csum), dtype=np.int8)
+    csum_s = np.ones((n_csum,), dtype=np.float32)
+    for idx, (name, hc_col, scale) in enumerate(_CSUM_SPECS):
+        csum_w[hc_col, idx] = 1
+        csum_s[idx] = scale
+        feat[name] = idx
+    trit_mats["col_sum_proj"], vecs_1d["col_sum_s"] = csum_w, csum_s
+
+    conv3_w, conv3_s, conv3_b, c3_next = _build_conv3_bank(n_conv3, off_c3, feat)
+    conv7_w, conv7_s, conv7_b, c7_next = _build_conv7_bank(n_conv7, off_c7, feat)
+    conv13_w, conv13_s, conv13_b, c13_next = _build_conv13_bank(n_conv13, off_c13, feat)
+    _stamp_friction_convs(
+        conv3_w, conv3_s, conv3_b, conv7_w, conv7_s, conv7_b,
+        conv13_w, conv13_s, conv13_b, feat,
+        (off_c3, off_c7, off_c13), (c3_next, c7_next, c13_next),
+    )
+
+    num_raw_u = n_csum + n_conv3 + n_conv7 + n_conv13
+    _build_multiline_gates(trit_mats, vecs_1d, feat, num_raw_u)
+    line_rules = [
+        *_build_core_line_rules(),
+        *_build_indicator_and_polyglot_rules(),
+        *_build_friction_line_rules(),
+    ]
+
+    free_narrow = [slot for slot in range(n_conv3) if not np.any(conv3_w[:, :, slot])]
+    free_medium = [slot for slot in range(n_conv7) if not np.any(conv7_w[:, :, slot])]
+    free_wide = [slot for slot in range(n_conv13) if not np.any(conv13_w[:, :, slot])]
+    scaled_cache: dict[tuple[int, float], int] = {}
+    conv_banks: tuple[ConvBankSpec, ...] = (
+        (off_c7, off_c3, conv3_w, conv3_s, conv3_b, free_narrow),
+        (off_c13, off_c7, conv7_w, conv7_s, conv7_b, free_medium),
+        (10**9, off_c13, conv13_w, conv13_s, conv13_b, free_wide),
+    )
+
+    num_u = num_raw_u + N_ML_GATE + N_PAREN_SUF + N_PREV_LINE
+    n_lm1 = 224
+    lm1_w = np.zeros((num_u, n_lm1), dtype=np.int8)
+    lm1_s = np.ones((n_lm1,), dtype=np.float32)
+    lm1_b = np.zeros((n_lm1,), dtype=np.float32)
+    lm2_w = np.zeros((n_lm1, N_LMLP2), dtype=np.int8)
+    lm2_b = np.zeros((N_LMLP2,), dtype=np.float32)
+
+    ml_protected = {
+        feat["triple_dq"], feat["triple_sq"],
+        feat["ml_bcomm_open"], feat["ml_bcomm_close"],
+        feat["code_lparen"], feat["code_rparen"],
+        feat["= @_;"], feat["intent("],
+    }
+    ref_counts: Counter[int] = Counter(
+        feat[name] for terms, _, _, _ in line_rules for name, _ in terms
+    )
+    rescaled_once: set[int] = set()
+
+    for unit, (terms, bias, dst_z, out_scale) in enumerate(line_rules):
+        merged: dict[int, float] = {}
+        for name, weight in terms:
+            idx = feat[name]
+            merged[idx] = merged.get(idx, 0.0) + weight
+
+        abs_out = abs(out_scale)
+        mag_counts = Counter(round(abs(wt), 6) for wt in merged.values())
+        base_mag = max(mag_counts.items(), key=lambda pair: (pair[1], pair[0]))[0]
+        lm1_s[unit] = base_mag * abs_out
+        lm1_b[unit] = bias * abs_out
+        lm2_w[unit, dst_z] = 1 if out_scale >= 0 else -1
+
+        for base_idx, wt_val in merged.items():
+            mult = abs(wt_val) / base_mag
+            can_rescale = (
+                ref_counts[base_idx] == 1
+                and base_idx >= off_c3
+                and base_idx not in rescaled_once
+                and base_idx not in ml_protected
+            )
+            if abs(mult - 1.0) < 1e-6:
+                src_col = base_idx
+            elif can_rescale:
+                rescaled_once.add(base_idx)
+                _rescale_conv_in_place(base_idx, mult, conv_banks)
+                src_col = base_idx
+            else:
+                src_col = _clone_scaled_feat(
+                    base_idx, mult, csum_w, csum_s, conv_banks, scaled_cache
+                )
+            lm1_w[src_col, unit] = 1 if wt_val >= 0 else -1
+
+    next_unit, z_helpers = _wire_multiline_and_helpers(
+        lm1_w, lm1_s, lm1_b, lm2_w, feat, num_raw_u, len(line_rules)
+    )
     trit_mats["conv3_w"], vecs_1d["conv3_s"], vecs_1d["conv3_b"] = conv3_w, conv3_s, conv3_b
     trit_mats["conv7_w"], vecs_1d["conv7_s"], vecs_1d["conv7_b"] = conv7_w, conv7_s, conv7_b
     trit_mats["conv13_w"], vecs_1d["conv13_s"], vecs_1d["conv13_b"] = conv13_w, conv13_s, conv13_b
@@ -1988,12 +2112,10 @@ def _build_block1(
     return z_helpers
 
 
-def _build_block2_and_heads(
-    trit_mats: dict[str, np.ndarray],
-    vecs_1d: dict[str, np.ndarray],
-    zh: dict[str, int],
+def _build_attn1(
+    trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarray], zh: dict[str, int]
 ) -> None:
-    """Compile {-1, 0, +1} sink-attention heads, [0, 1] issue clamps, and System One readout."""
+    """Compile Pass 1 12-head cross-line sink attention (narrators, errors, scopes, clones)."""
     center = MAX_REL_DIST
     num_rel = 2 * center + 1
     a1_wq = np.zeros((N_Z, 192), dtype=np.int8)
@@ -2012,7 +2134,6 @@ def _build_block2_and_heads(
         dtype=np.float32,
     )
 
-    # Head 0: uniform-diagonal Paley Hadamard projection for comment-to-code overlap
     h0_trits = _paley_uniform_proj()
     sk_trits, sk_scales = _ternary_sketch_proj()
     comm_slice = slice(Z_COMM_SKETCH, Z_COMM_SKETCH + SKETCH_DIM)
@@ -2035,11 +2156,8 @@ def _build_block2_and_heads(
     a1_wk_s[swift_qk] = float(np.sqrt(32.0))
     a1_wv[Z_SWIFT_NIL, swift_slot] = a1_wo[swift_slot, Z_SWIFT_NIL] = 1
     a1_wv_s[swift_slot] = 1.5
-    # Handler lines only outbid the sink when a try/catch opener queries them; a line with no
-    # opener (zero query) attends to the sink instead of averaging stray `{}` literals
     a1_br[1, center : center + 7] = -3.5
 
-    # Head 2 (L-8..L), Head 3 (L-9..L+9), Head 6 (file-wide with sink prior), Head 7 (L-3..L+3)
     a1_br[2, center - 8 : center + 1] = 0.0
     a1_br[3, center - 9 : center + 10] = 0.0
     a1_br[6, :] = 0.0
@@ -2077,7 +2195,6 @@ def _build_block2_and_heads(
         a1_wv[srcs, slots] = 1
         a1_wo[slots, dsts] = 1
 
-    # Heads 4 & 5: Gram-fitted ternary clone match (8 <= |d| < 32) minus adjacent table match
     abs_offset = np.abs(np.arange(-center, center + 1))
     a1_wq[code_slice, H4_QK] = sk_trits
     a1_wk[code_slice, H4_QK] = sk_trits
@@ -2090,7 +2207,6 @@ def _build_block2_and_heads(
     a1_wv_s[60] = 0.80
     a1_wo[[48, 60], Z_DISTANT_CLONE] = [1, -1]
 
-    # Pre-scale single-consumer context channels via a1_wv_s for exact {-1, 0, +1} cmlp1_w
     a1_wv_s[0] *= 2.4
     a1_wv_s[[12, 13]] *= [4.0 / 1.8, 1.4 / 1.8]
     a1_wv_s[26] *= 5.2 / 0.5
@@ -2120,8 +2236,7 @@ def _build_block2_and_heads(
     a1_wv[Z_STDLIB_IDIOM, test_slot] = a1_wo[test_slot, zh["stdlib_r4"]] = 1
     a1_wv_s[test_slot] = 1.5
 
-    # Track 3 attention heads: scope entanglement (H3), enclosing loops (H8),
-    # multiline signature span (H9), and alpha-invariant skeleton clones (H10, H11)
+    # Scope entanglement (H3), enclosing loops (H8), signature span (H9), skeleton clones (H10, H11)
     a1_wv[[Z_MUT_STMT, Z_SIG_CAND], [42, 43]] = 1
     a1_wv_s[[42, 43]] = [7.8, 22.0]
     a1_wo[[42, 43], Z_LOCAL_MUT_DENS] = [1, -1]
@@ -2150,7 +2265,6 @@ def _build_block2_and_heads(
     a1_wv_s[h9_slots] = float(np.exp(3.5))
     a1_wo[h9_slots, span_regs] = 1
 
-    # Joint 4-dim lexical stem + 12-dim Paley operator-skeleton QK kernel
     skel_proj = _paley_uniform_proj(seed=7)
     skel_slice = slice(Z_SKEL_SKETCH, Z_SKEL_SKETCH + SKETCH_DIM)
     for qk_base in (160, 176):
@@ -2175,7 +2289,11 @@ def _build_block2_and_heads(
     trit_mats["attn1_wo"] = a1_wo
     vecs_1d["attn1_brel"], vecs_1d["attn1_bsink"] = a1_br, a1_bs
 
-    # Context MLP 1: paired {-1, 0, +1} ReLU clamps writing [0, 1] issue flags
+
+def _build_ctx_mlp1(
+    trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarray], zh: dict[str, int]
+) -> None:
+    """Compile Context MLP 1 paired {-1, 0, +1} ReLU clamps writing [0, 1] issue flags."""
     wide_dsts = [Z_USES_WIDE_INDENT, Z_WIDE_DUP_A, Z_WIDE_DUP_B]
     doc_veto = (zh["in_doc_8"], -1)
     par_veto = (zh["in_par_8"], -1)
@@ -2260,7 +2378,6 @@ def _build_block2_and_heads(
           (Z_COMM_STRONG_CUE, -1), (Z_LINE_COMM_VETO, -1), (Z_NEAR_COMM_FENCE, -1), doc_veto],
          -2.5, [Z_COMM_CODE_LINE], 1.0, 4.0),
 
-        # Track 3 per-clause [0, 1] clamps & skeleton-clone candidate
         ([(Z_ENC_LOOP, 1), doc_veto], -0.75, [Z_HAS_ENC_LOOP], 1.0, 4.0),
         ([(Z_ENC_COND_LOOP, 1), doc_veto], -0.75, [Z_HAS_COND_LOOP], 1.0, 4.0),
         ([(Z_ENC_BRANCH, 1), (Z_COND_BRANCH, 1), doc_veto], -0.75, [Z_HAS_ENC_BR1], 1.0, 4.0),
@@ -2295,7 +2412,11 @@ def _build_block2_and_heads(
     trit_mats["cmlp1_w"], vecs_1d["cmlp1_s"], vecs_1d["cmlp1_b"] = cm1_w, cm1_s, cm1_b
     trit_mats["cmlp1_2_w"], vecs_1d["cmlp1_2_b"] = cm1_2w, cm1_2b
 
-    # Pass 2 neighborhood smoothing attention (9 heads) & context MLP 2 in {-1, 0, +1}
+
+def _build_attn2(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarray]) -> None:
+    """Compile Pass 2 9-head neighborhood smoothing and causal lookback attention."""
+    center = MAX_REL_DIST
+    num_rel = 2 * center + 1
     a2_wq = np.zeros((N_Z, 144), dtype=np.int8)
     a2_wq_s = np.ones((144,), dtype=np.float32)
     a2_wk = np.zeros((N_Z, 144), dtype=np.int8)
@@ -2304,6 +2425,7 @@ def _build_block2_and_heads(
     a2_wv_s = np.ones((144,), dtype=np.float32)
     a2_wo = np.zeros((144, N_Z), dtype=np.int8)
     a2_br = np.full((9, num_rel), -1e4, dtype=np.float32)
+
     a2_br[0, center - 3 : center + 4] = 0.0
     a2_br[1, center - 2 : center + 3] = 0.0
     a2_br[2, center - 3 : center + 4] = 0.0
@@ -2333,13 +2455,11 @@ def _build_block2_and_heads(
     a2_wo[h8_a2_slot, Z_SMOOTH_SKEL_CLONE] = 1
 
     # Top-level (non-class) nesting smoothing in Head 1 -> Z_ENCLOSING_DEPTH (reused post-ctx1)
-    Z_SMOOTH_NEST_TOP = Z_ENCLOSING_DEPTH
     h1_top_slot, h3_slots = 19, [48, 49]
     a2_wv[Z_RAW_NEST_TOP, h1_top_slot] = 1
     a2_wv_s[h1_top_slot] = 1.0
-    a2_wo[h1_top_slot, Z_SMOOTH_NEST_TOP] = 1
+    a2_wo[h1_top_slot, Z_ENCLOSING_DEPTH] = 1
 
-    # Head 3: [-24..0] causal lookback for C# `bool Try*` narrow catches & Lua `pcall(` fallbacks
     a2_wq[[Z_NARROW_CATCH, Z_KT_GETNULL], h3_slots] = 1
     a2_wk[[Z_TRY_BOOL_SIG, Z_LUA_PCALL], h3_slots] = 1
     a2_wq_s[h3_slots] = [6.0, 6.0 / 8.0]
@@ -2383,6 +2503,9 @@ def _build_block2_and_heads(
         [0.7, -12.0, -12.0, 1.5, math.log(5.0), 4.0, 4.0, 0.0, 1.1], dtype=np.float32
     )
 
+
+def _build_ctx_mlp2(trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarray]) -> None:
+    """Compile Context MLP 2 smoothed readouts and Boolean-AND structural gates."""
     n_cm2 = 64
     cm2_w = np.zeros((N_Z, n_cm2), dtype=np.int8)
     cm2_s = np.ones((n_cm2,), dtype=np.float32)
@@ -2396,11 +2519,12 @@ def _build_block2_and_heads(
     for pair_u in (2, 3):
         cm2_w[[Z_RAW_CRYPTIC, Z_SMOOTH_CRYPTIC, Z_CRYPTIC_GATE], pair_u] = 1
         cm2_w[Z_IN_DOC, pair_u] = -1
-    cm2_s[:4] = [2.0, 2.0, 1.6, 1.6]
-    cm2_b[:4] = [-3.35, -4.35, -3.6, -4.6]
+    cm2_s[:4] = [4.0, 4.0, 1.6, 1.6]
+    cm2_b[:4] = [-7.60, -8.60, -3.6, -4.6]
     cm2_2w[[0, 1], Z_ISS_CLONE] = [1, -1]
     cm2_2w[[2, 3], Z_ISS_NAMING] = [1, -1]
 
+    wide_dsts = [Z_USES_WIDE_INDENT, Z_WIDE_DUP_A, Z_WIDE_DUP_B]
     cm2_w[Z_RAW_NESTING_2SP, [4, 5]] = 1
     cm2_w[Z_SMOOTH_NEST_2SP, [6, 7]] = 1
     for wide_u in range(4, 8):
@@ -2411,17 +2535,16 @@ def _build_block2_and_heads(
     cm2_2w[[4, 5], Z_ISS_NESTING] = [1, -1]
     cm2_2w[[6, 7], Z_SMOOTH_NEST] = [1, -1]
 
-    # Add top-level 4-space nesting only when file does NOT use class/impl containers
     cm2_w[Z_RAW_NEST_TOP, [8, 9]] = 1
-    cm2_w[Z_SMOOTH_NEST_TOP, [10, 11]] = 1
+    cm2_w[Z_ENCLOSING_DEPTH, [10, 11]] = 1
+    top_vetoes = [Z_HAS_CONTAINER, Z_ISS_NESTING, Z_IN_DOC, Z_IN_PAREN, Z_SHALLOW_LINE]
     for top_u in range(8, 12):
-        cm2_w[[Z_HAS_CONTAINER, Z_ISS_NESTING, Z_IN_DOC, Z_IN_PAREN, Z_SHALLOW_LINE], top_u] = -1
+        cm2_w[top_vetoes, top_u] = -1
     cm2_s[[10, 11]] = nest_sm_ratio
     cm2_b[8:12] = [0.0, -1.0, 0.0, -nest_sm_ratio]
     cm2_2w[[8, 9], Z_ISS_NESTING] = [1, -1]
     cm2_2w[[10, 11], Z_SMOOTH_NEST] = [1, -1]
 
-    # Cancel Z_SMOOTH_NEST smearing onto shallow / docstring / paren-continuation lines
     for cancel_u in (12, 13):
         cm2_w[[Z_SMOOTH_NEST, Z_SHALLOW_LINE, Z_IN_DOC, Z_IN_PAREN], cancel_u] = 1
     cm2_s[[12, 13]] = 1.0
@@ -2432,11 +2555,14 @@ def _build_block2_and_heads(
         (Z_ISS_ERROR, 1), (Z_CLEAN_BONUS, -1),
         (Z_GUARD_CLAUSE, -1), (Z_EARLY_EXIT, -1),
     ]
+    hedge_terms = [
+        (Z_TYPE_HEDGE_IF, 1), (Z_HAS_RECENT_TYPED_SIG, 1),
+        (Z_NEAR_NEUTRAL_RET, 1), (Z_IN_DOC, -1),
+    ]
     ctx2_rules: list[tuple[list[tuple[int, int]], float, list[tuple[int, int]], float]] = [
         ([(Z_COMM_CODE_LINE, 1), (Z_SMOOTH_COMM_CODE, 1), (Z_IN_DOC, -1)],
          -1.293, [(Z_ISS_COMMENT, 1)], 150.0),
-        ([(Z_TYPE_HEDGE_IF, 1), (Z_HAS_RECENT_TYPED_SIG, 1), (Z_NEAR_NEUTRAL_RET, 1), (Z_IN_DOC, -1)],
-         -2.5, paranoid_dsts, 4.0),
+        (hedge_terms, -2.5, paranoid_dsts, 4.0),
         ([(Z_ENV_CHAIN_1L, 1), (Z_NEXT_FAIL_FAST, -1), (Z_IN_DOC, -1)],
          -0.5, [(Z_ISS_ERROR, 1)], 4.0),
         ([(Z_ENV_DEV_1L, 1), (Z_ENV_CHAIN_1L, -1), (Z_NEXT_FAIL_FAST, -1), (Z_IN_DOC, -1)],
@@ -2458,8 +2584,6 @@ def _build_block2_and_heads(
         ([(Z_KT_GETNULL, 1), (Z_LUA_PCALL, 1), (Z_IN_DOC, -1)],
          -8.5, [(Z_ISS_ERROR, 1)], 4.0),
 
-        # Track 3 Boolean-AND readouts: cursor mutation, flag+out-ref threading,
-        # multi-line alpha-invariant skeleton clones, and intra-scope state entanglement
         ([(Z_CURSOR_MUT, 1), (Z_CURSOR_INDENT, 1), (Z_HAS_ENC_LOOP, 1),
           (Z_HAS_ENC_BR1, 1), (Z_ISS_NESTING, -1), (Z_IN_DOC, -1), (Z_IN_PAREN, -1)],
          -3.6, [(Z_ISS_NESTING, 1)], 4.0),
@@ -2489,25 +2613,50 @@ def _build_block2_and_heads(
     vecs_1d["cmlp2_s"], vecs_1d["cmlp2_b"] = cm2_s[:used_cm2], cm2_b[:used_cm2]
     trit_mats["cmlp2_2_w"], vecs_1d["cmlp2_2_b"] = cm2_2w[:used_cm2, :], cm2_2b
 
-    # Block 3 readout: {-1, 0, +1} squiggle head & balanced-ternary System One heads
-    issue_regs = [
-        Z_ISS_NESTING, Z_ISS_NAMING, Z_ISS_COMMENT, Z_ISS_ERROR,
-        Z_ISS_DENSE, Z_ISS_SPECIAL, Z_ISS_CLONE, Z_ISS_LAYOUT,
-    ]
-    sq_w = np.zeros((N_Z, 8), dtype=np.int8)
-    sq_w[issue_regs, range(8)] = 1
-    sq_w[[Z_SMOOTH_NEST, Z_SMOOTH_SPECIAL, Z_SMOOTH_LAYOUT], [0, 5, 7]] = 1
-    sq_s = np.array([4.2, 4.6, 4.8, 4.7, 4.7, 4.3, 4.8, 4.3], dtype=np.float32)
-    sq_b = np.full((8,), -2.7, dtype=np.float32)
-    trit_mats["sq_w"], vecs_1d["sq_s"], vecs_1d["sq_b"] = sq_w, sq_s, sq_b
 
-    pool_gate_w = np.zeros((N_Z, 1), dtype=np.int8)
-    pool_gate_w[[Z_ACTIVE, Z_IN_DOC], 0] = [1, -1]
-    trit_mats["pool_gate_w"] = pool_gate_w
-    vecs_1d["pool_gate_s"] = np.array([12.0], dtype=np.float32)
-    vecs_1d["pool_gate_b"] = np.array([-6.0], dtype=np.float32)
+def _write_dual_clamp_row(
+    doc1_w: np.ndarray,
+    doc1_s: np.ndarray,
+    doc1_b: np.ndarray,
+    doc2_w: np.ndarray,
+    cursor: int,
+    reg: int,
+    row_weights: np.ndarray,
+    step_base: float,
+    mean_spec: tuple[float, float, float],
+    peak_spec: tuple[float, float, float],
+) -> int:
+    """Decompose a 31-logit readout row into balanced-ternary mean and peak clamp pairs."""
+    m_gain, m_off, m_cap = mean_spec
+    p_gain, p_off, p_cap = peak_spec
+    for trit_i, pow3 in enumerate((1.0, 3.0, 9.0)):
+        step_c = step_base * pow3
+        u_pos, u_neg = cursor, cursor + 1
+        v_pos, v_neg = cursor + 2, cursor + 3
+        cursor += 4
 
-    # Build target readout weights (9 logical rows -> 31 logits), then decompose into trits
+        doc1_w[reg, [u_pos, u_neg]] = 1
+        doc1_s[[u_pos, u_neg]] = m_gain * step_c
+        m_hi = 0.0 if m_off == 0.0 else -m_off * step_c
+        doc1_b[[u_pos, u_neg]] = [m_hi, (-m_off - m_cap) * step_c]
+
+        doc1_w[N_Z + reg, [v_pos, v_neg]] = 1
+        doc1_s[[v_pos, v_neg]] = p_gain * step_c
+        doc1_b[[v_pos, v_neg]] = [-p_off * step_c, (-p_off - p_cap) * step_c]
+
+        for col_j in range(31):
+            w_val = float(row_weights[col_j])
+            if abs(w_val) <= 1e-6:
+                continue
+            trit = _balanced_trits(w_val, step_base, num_trits=3)[trit_i]
+            if trit != 0:
+                doc2_w[[u_pos, u_neg], col_j] = [trit, -trit]
+                doc2_w[[v_pos, v_neg], col_j] = [trit, -trit]
+    return cursor
+
+
+def _build_target_doc2(style_base: int) -> tuple[np.ndarray, np.ndarray]:
+    """Build logical 9-row -> 31-logit readout targets and bias vector."""
     target_doc2 = np.zeros((9, 31), dtype=np.float32)
     doc2_b = np.zeros((31,), dtype=np.float32)
     doc2_b[:2] = [1.88, 1.98]
@@ -2532,13 +2681,38 @@ def _build_block2_and_heads(
             ]
         target_doc2[8, [base, base + 3]] += [-0.30, 0.30]
 
-    style_base = 26
     doc2_b[style_base : style_base + 5] = [1.25, 1.35, -2.10, -2.10, -2.20]
     target_doc2[:8, style_base] -= 1.20
     target_doc2[:8, style_base + 1] -= 1.05
     target_doc2[8, [style_base, style_base + 1]] += [0.35, 0.25]
     target_doc2[[4, 0], style_base + 3] += [3.0, 1.1]
     target_doc2[[2, 3, 5, 6, 7, 0], style_base + 4] += [2.9, 3.1, 3.3, 3.0, 1.8, 1.1]
+    return target_doc2, doc2_b
+
+
+def _build_system_one_heads(
+    trit_mats: dict[str, np.ndarray], vecs_1d: dict[str, np.ndarray]
+) -> None:
+    """Compile Block 3 squiggle head, pool gate, and balanced-ternary System One heads."""
+    issue_regs = [
+        Z_ISS_NESTING, Z_ISS_NAMING, Z_ISS_COMMENT, Z_ISS_ERROR,
+        Z_ISS_DENSE, Z_ISS_SPECIAL, Z_ISS_CLONE, Z_ISS_LAYOUT,
+    ]
+    sq_w = np.zeros((N_Z, 8), dtype=np.int8)
+    sq_w[issue_regs, range(8)] = 1
+    sq_w[[Z_SMOOTH_NEST, Z_SMOOTH_SPECIAL, Z_SMOOTH_LAYOUT], [0, 5, 7]] = 1
+    sq_s = np.array([4.2, 4.6, 4.8, 4.7, 4.7, 4.3, 4.8, 4.3], dtype=np.float32)
+    sq_b = np.full((8,), -2.7, dtype=np.float32)
+    trit_mats["sq_w"], vecs_1d["sq_s"], vecs_1d["sq_b"] = sq_w, sq_s, sq_b
+
+    pool_gate_w = np.zeros((N_Z, 1), dtype=np.int8)
+    pool_gate_w[[Z_ACTIVE, Z_IN_DOC], 0] = [1, -1]
+    trit_mats["pool_gate_w"] = pool_gate_w
+    vecs_1d["pool_gate_s"] = np.array([12.0], dtype=np.float32)
+    vecs_1d["pool_gate_b"] = np.array([-6.0], dtype=np.float32)
+
+    style_base = 26
+    target_doc2, doc2_b = _build_target_doc2(style_base)
 
     n_doc1 = 140
     doc1_w = np.zeros((2 * N_Z, n_doc1), dtype=np.int8)
@@ -2551,33 +2725,13 @@ def _build_block2_and_heads(
     mean_gain, max_gain, max_deadzone = 2.8, 12.0, 0.030
     step_issue = 0.22
     doc_cursor = 0
+    peak_off = max_gain * max_deadzone
 
     for head_i, reg in enumerate(issue_regs):
-        cap_m = caps_mean[head_i]
-        cap_p = caps_max[head_i]
-        for trit_i, pow3 in enumerate((1.0, 3.0, 9.0)):
-            step_c = step_issue * pow3
-            u_pos, u_neg = doc_cursor, doc_cursor + 1
-            v_pos, v_neg = doc_cursor + 2, doc_cursor + 3
-            doc_cursor += 4
-
-            doc1_w[reg, [u_pos, u_neg]] = 1
-            doc1_s[[u_pos, u_neg]] = mean_gain * step_c
-            doc1_b[[u_pos, u_neg]] = [0.0, -cap_m * step_c]
-
-            doc1_w[N_Z + reg, [v_pos, v_neg]] = 1
-            doc1_s[[v_pos, v_neg]] = max_gain * step_c
-            peak_off = max_gain * max_deadzone
-            doc1_b[[v_pos, v_neg]] = [-peak_off * step_c, (-peak_off - cap_p) * step_c]
-
-            for col_j in range(31):
-                w_val = float(target_doc2[head_i, col_j])
-                if abs(w_val) <= 1e-6:
-                    continue
-                trit = _balanced_trits(w_val, step_issue, num_trits=3)[trit_i]
-                if trit != 0:
-                    doc2_w[[u_pos, u_neg], col_j] = [trit, -trit]
-                    doc2_w[[v_pos, v_neg], col_j] = [trit, -trit]
+        doc_cursor = _write_dual_clamp_row(
+            doc1_w, doc1_s, doc1_b, doc2_w, doc_cursor, reg, target_doc2[head_i],
+            step_issue, (mean_gain, 0.0, caps_mean[head_i]), (max_gain, peak_off, caps_max[head_i]),
+        )
 
     step_bonus = 0.05
     for trit_i, pow3 in enumerate((1.0, 3.0, 9.0)):
@@ -2596,16 +2750,19 @@ def _build_block2_and_heads(
                 doc2_w[[u_pos, u_neg], col_j] = [trit, -trit]
 
     struct_clamps = (
-        (Z_ENCLOSING_DEPTH, 2.2, 0.22, 0.35),
-        (Z_INDENT, 0.55, 3.10, 0.25),
-        (Z_ENCLOSING_BRANCHES, 1.6, 0.80, 0.65),
-        (Z_IMPERATIVE_LINE, 2.8, 0.45, 0.45),
-        (N_Z + Z_DISTANT_CLONE, 6.0, 0.112, 0.40),
+        ([Z_INDENT, Z_ENCLOSING_DEPTH], [], 0.75, 3.35, 0.45),
+        ([Z_ENCLOSING_BRANCHES], [], 1.8, 0.80, 0.65),
+        ([Z_LOCAL_STMT_DENSITY], [Z_LOCAL_BREAK_DENSITY], 1.3, 4.45, 0.75),
+        ([Z_MUT_STMT], [], 7.0, 0.212, 0.65),
+        ([Z_HAS_CTRL_DENS], [], 9.0, 0.040, 0.65),
     )
-    for src_reg, s_gain, s_offset, w_mag in struct_clamps:
+    for pos_regs, neg_regs, s_gain, s_offset, w_mag in struct_clamps:
         u_pos, u_neg = doc_cursor, doc_cursor + 1
         doc_cursor += 2
-        doc1_w[src_reg, [u_pos, u_neg]] = 1
+        if pos_regs:
+            doc1_w[pos_regs, [u_pos, u_neg]] = 1
+        if neg_regs:
+            doc1_w[neg_regs, [u_pos, u_neg]] = -1
         doc1_s[[u_pos, u_neg]] = s_gain * w_mag
         off_scaled = s_offset * s_gain * w_mag
         doc1_b[[u_pos, u_neg]] = [-off_scaled, -off_scaled - w_mag]
@@ -2627,7 +2784,6 @@ def _build_block2_and_heads(
         doc1_s[slot] = sc_val
         doc2_w[slot, dst_col] = 1
 
-    # Track 3 mutable-scope entanglement saturating readout (mean + span-damped 32-line peak)
     ent_row = np.zeros((31,), dtype=np.float32)
     ent_row[:2] = [-1.45, -1.30]
     for score_i, mult in ((0, 0.75), (2, 0.85)):
@@ -2636,32 +2792,27 @@ def _build_block2_and_heads(
     ent_row[style_base : style_base + 2] -= [1.10, 0.90]
     ent_row[style_base + 3] += 1.40
 
-    for trit_i, pow3 in enumerate((1.0, 3.0, 9.0)):
-        step_c = step_issue * pow3
-        u_pos, u_neg = doc_cursor, doc_cursor + 1
-        v_pos, v_neg = doc_cursor + 2, doc_cursor + 3
-        doc_cursor += 4
-
-        doc1_w[Z_SCOPE_ENTANGLE, [u_pos, u_neg]] = 1
-        doc1_s[[u_pos, u_neg]] = 2.6 * step_c
-        doc1_b[[u_pos, u_neg]] = [-0.08 * step_c, (-0.08 - 0.85) * step_c]
-
-        doc1_w[N_Z + Z_SCOPE_ENTANGLE, [v_pos, v_neg]] = 1
-        doc1_s[[v_pos, v_neg]] = 3.2 * step_c
-        doc1_b[[v_pos, v_neg]] = [-0.45 * step_c, (-0.45 - 1.10) * step_c]
-
-        for col_j in range(31):
-            w_val = float(ent_row[col_j])
-            if abs(w_val) <= 1e-6:
-                continue
-            trit = _balanced_trits(w_val, step_issue, num_trits=3)[trit_i]
-            if trit != 0:
-                doc2_w[[u_pos, u_neg], col_j] = [trit, -trit]
-                doc2_w[[v_pos, v_neg], col_j] = [trit, -trit]
+    doc_cursor = _write_dual_clamp_row(
+        doc1_w, doc1_s, doc1_b, doc2_w, doc_cursor, Z_SCOPE_ENTANGLE,
+        ent_row, step_issue, (2.6, 0.08, 0.85), (3.2, 0.45, 1.10),
+    )
 
     trit_mats["doc1_w"] = doc1_w[:, :doc_cursor]
     vecs_1d["doc1_s"], vecs_1d["doc1_b"] = doc1_s[:doc_cursor], doc1_b[:doc_cursor]
     trit_mats["doc2_w"], vecs_1d["doc2_b"] = doc2_w[:doc_cursor, :], doc2_b
+
+
+def _build_block2_and_heads(
+    trit_mats: dict[str, np.ndarray],
+    vecs_1d: dict[str, np.ndarray],
+    zh: dict[str, int],
+) -> None:
+    """Compile {-1, 0, +1} sink-attention heads, [0, 1] issue clamps, and System One readout."""
+    _build_attn1(trit_mats, vecs_1d, zh)
+    _build_ctx_mlp1(trit_mats, vecs_1d, zh)
+    _build_attn2(trit_mats, vecs_1d)
+    _build_ctx_mlp2(trit_mats, vecs_1d)
+    _build_system_one_heads(trit_mats, vecs_1d)
 
 
 def compile_ternary_tensors() -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
@@ -2709,9 +2860,6 @@ if __name__ == "__main__":
     out_file = Path(__file__).with_name("codehygiene") / "weights.npz"
     trits_raw, vecs_raw = compile_ternary_tensors()
     compile_weights(out_file)
-    docs_weights = Path(__file__).with_name("docs") / "weights.npz"
-    if docs_weights.parent.is_dir():
-        docs_weights.write_bytes(out_file.read_bytes())
     size_kb = out_file.stat().st_size / 1024
     num_trits = sum(arr.size for arr in trits_raw.values())
     num_vecs = sum(arr.size for arr in vecs_raw.values())

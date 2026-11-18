@@ -1,5 +1,7 @@
-from pathlib import Path
+"""codehygiene v0.6.1 — PEP 338 CLI entry point (`python -m codehygiene`)."""
+
 import sys
+from pathlib import Path
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

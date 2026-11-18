@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codehygiene"
-version = "0.6.0"
+version = "0.6.1"
 description = "A 23.8 KiB, 1.58-bit ternary weight-space programmed System One model for code readability and hygiene."
 readme = "README.md"
 license = {text = "MIT"}
@@ -27,4 +27,4 @@ codehygiene = "codehygiene:main"
 include = ["codehygiene*"]
 
 [tool.setuptools.package-data]
-codehygiene = ["weights.npz", "SKILL.md"]
+codehygiene = ["weights.npz", "SKILL.md", "engine.js"]

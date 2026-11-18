@@ -1,3 +1,5 @@
+/** codehygiene v0.6.1 — Pure-JavaScript Float32Array ternary neural scorer (exact parity with __init__.py). */
+
 const MAX_COLS = 128;
 const MAX_REL_DIST = 32;
 const SKETCH_DIM = 40;
@@ -18,21 +20,9 @@ const POW3 = [1, 3, 9, 27, 81];
 const SCORE_LEVELS = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
 
 export const SCORE_NAMES = [
-  "flatness",
-  "naming",
-  "simplicity",
-  "comments",
-  "error_handling",
-  "layout",
+  "flatness", "naming", "simplicity", "comments", "error_handling", "layout",
 ];
-
-export const ARCHETYPE_NAMES = [
-  "minimal",
-  "clean",
-  "enterprise",
-  "dense",
-  "slop",
-];
+export const ARCHETYPE_NAMES = ["minimal", "clean", "enterprise", "dense", "slop"];
 
 const SQUIGGLE_SPEC = [
   ["deep_nesting", "Deep nesting; flatten with guard clauses"],
@@ -90,12 +80,10 @@ function parseNpyArray(bytes) {
     return new Uint8Array(body);
   }
   if (descr === "<f4") {
-    const aligned = body.slice();
-    return new Float32Array(aligned.buffer);
+    return new Float32Array(body.slice().buffer);
   }
   if (descr.startsWith("<U")) {
-    const aligned = body.slice();
-    const codePoints = new Uint32Array(aligned.buffer);
+    const codePoints = new Uint32Array(body.slice().buffer);
     const chars = new Array(codePoints.length);
     for (let idx = 0; idx < codePoints.length; idx += 1) {
       chars[idx] = String.fromCodePoint(codePoints[idx]);
@@ -128,27 +116,31 @@ export async function unpackNpzBuffer(arrayBuffer) {
     const dataStart = localPos + 30 + localNameLen + localExtraLen;
     const rawSlice = bytes.subarray(dataStart, dataStart + compSize);
     const unzipped = method === 8 ? await inflateRawBytes(rawSlice) : rawSlice;
-    const stem = entryName.replace(/\.npy$/, "");
-    entries[stem] = parseNpyArray(unzipped);
+    entries[entryName.replace(/\.npy$/, "")] = parseNpyArray(unzipped);
     dirPos += 46 + nameLen + extraLen + commentLen;
   }
 
   return unpackTernaryArchive(entries.trits, entries.vecs, entries.meta);
 }
 
-function buildSparse2D(dense, rows, cols) {
-  const rowOffsets = new Int32Array(rows + 1);
-  const activeList = [];
-  let nonZeroCount = 0;
-  for (let idx = 0; idx < dense.length; idx += 1) {
-    if (dense[idx] !== 0) {
-      nonZeroCount += 1;
+function countNonZero(arr) {
+  let count = 0;
+  for (let idx = 0; idx < arr.length; idx += 1) {
+    if (arr[idx] !== 0) {
+      count += 1;
     }
   }
+  return count;
+}
 
+function buildSparse2D(dense, rows, cols) {
+  const nonZeroCount = countNonZero(dense);
+  const rowOffsets = new Int32Array(rows + 1);
   const colIndices = new Int32Array(nonZeroCount);
   const values = new Float32Array(nonZeroCount);
+  const activeList = [];
   let cursor = 0;
+
   for (let row = 0; row < rows; row += 1) {
     rowOffsets[row] = cursor;
     const rowBase = row * cols;
@@ -170,31 +162,22 @@ function buildSparse2D(dense, rows, cols) {
 }
 
 function buildSparseConv(dense, kSize, inChannels, outChannels) {
+  const span = inChannels * outChannels;
   const taps = [];
   for (let tap = 0; tap < kSize; tap += 1) {
-    const tapBase = tap * inChannels * outChannels;
-    const slice = dense.subarray(tapBase, tapBase + inChannels * outChannels);
+    const slice = dense.subarray(tap * span, (tap + 1) * span);
     taps.push(buildSparse2D(slice, inChannels, outChannels));
   }
   return { data: dense, kSize, inChannels, outChannels, taps };
 }
 
-export function unpackTernaryArchive(tritBuf, vecBuf, metaStr) {
-  const [tritPart, vecPart] = metaStr.split("|");
-  const vecs = {};
-  let vecOffset = 0;
+function parseMetaEntry(entry) {
+  const [name, dimsText, countText] = entry.split(":");
+  const shape = dimsText.split(",").map((dim) => Number.parseInt(dim, 10));
+  return { name, shape, count: Number.parseInt(countText, 10) };
+}
 
-  for (const entry of vecPart.split(" ; ")) {
-    const [name, dimsText, countText] = entry.split(":");
-    const count = Number.parseInt(countText, 10);
-    const shape = dimsText.split(",").map((dim) => Number.parseInt(dim, 10));
-    vecs[name] = {
-      data: vecBuf.subarray(vecOffset, vecOffset + count),
-      shape,
-    };
-    vecOffset += count;
-  }
-
+function decodePackedTrits(tritBuf) {
   const flatTrits = new Int8Array(tritBuf.length * 5);
   for (let byteIdx = 0; byteIdx < tritBuf.length; byteIdx += 1) {
     const byteVal = tritBuf[byteIdx];
@@ -204,25 +187,40 @@ export function unpackTernaryArchive(tritBuf, vecBuf, metaStr) {
       flatTrits[dstBase + slot] = ((digit + 1) % 3) - 1;
     }
   }
+  return flatTrits;
+}
 
+function resolveScaleKey(name) {
+  if (name === "col_sum_proj") {
+    return "col_sum_s";
+  }
+  return name.endsWith("_w") ? `${name.slice(0, -2)}_s` : `${name}_s`;
+}
+
+export function unpackTernaryArchive(tritBuf, vecBuf, metaStr) {
+  const [tritPart, vecPart] = metaStr.split("|");
+  const vecs = {};
+  let vecOffset = 0;
+
+  for (const entry of vecPart.split(" ; ")) {
+    const { name, shape, count } = parseMetaEntry(entry);
+    vecs[name] = { data: vecBuf.subarray(vecOffset, vecOffset + count), shape };
+    vecOffset += count;
+  }
+
+  const flatTrits = decodePackedTrits(tritBuf);
   const params = {};
   let byteOffset = 0;
   let totalTrits = 0;
   let nonZeroTrits = 0;
 
   for (const entry of tritPart.split(" ; ")) {
-    const [name, dimsText, packedText] = entry.split(":");
-    const packedLen = Number.parseInt(packedText, 10);
-    const shape = dimsText.split(",").map((dim) => Number.parseInt(dim, 10));
+    const { name, shape, count: packedLen } = parseMetaEntry(entry);
     const numElems = shape.reduce((acc, dim) => acc * dim, 1);
     const tritStart = byteOffset * 5;
     byteOffset += packedLen;
 
-    let scaleKey = name.endsWith("_w") ? `${name.slice(0, -2)}_s` : `${name}_s`;
-    if (name === "col_sum_proj") {
-      scaleKey = "col_sum_s";
-    }
-    const scaleVec = vecs[scaleKey] ? vecs[scaleKey].data : null;
+    const scaleVec = vecs[resolveScaleKey(name)]?.data ?? null;
     const lastDim = shape[shape.length - 1];
     const dense = new Float32Array(numElems);
 
@@ -234,12 +232,9 @@ export function unpackTernaryArchive(tritBuf, vecBuf, metaStr) {
       }
     }
     totalTrits += numElems;
-
-    if (shape.length === 3) {
-      params[name] = buildSparseConv(dense, shape[0], shape[1], shape[2]);
-    } else {
-      params[name] = buildSparse2D(dense, shape[0], shape[1]);
-    }
+    params[name] = shape.length === 3
+      ? buildSparseConv(dense, shape[0], shape[1], shape[2])
+      : buildSparse2D(dense, shape[0], shape[1]);
   }
 
   for (const [name, vecObj] of Object.entries(vecs)) {
@@ -302,13 +297,11 @@ function splitPythonLines(text) {
   if (!text) {
     return [""];
   }
-  const trimmed = text.replace(/(?:\r\n|\r|\n)$/, "");
-  return trimmed.split(/\r\n|\r|\n/);
+  return text.replace(/(?:\r\n|\r|\n)$/, "").split(/\r\n|\r|\n/);
 }
 
 export function encodeByteGrid(code, maxLines = null) {
-  const expanded = expandTabsTwo(code);
-  const allLines = splitPythonLines(expanded);
+  const allLines = splitPythonLines(expandTabsTwo(code));
   const lines = maxLines === null ? allLines : allLines.slice(0, maxLines);
   const numLines = lines.length;
   const grid = new Uint8Array(numLines * MAX_COLS);
@@ -337,12 +330,11 @@ function buildActiveSlices(arrays, dims, activeRows) {
   const slices = [];
   let inOffset = 0;
   let actCursor = 0;
-  const numActive = activeRows.length;
 
   for (let part = 0; part < arrays.length; part += 1) {
     const nextOffset = inOffset + dims[part];
     const actStart = actCursor;
-    while (actCursor < numActive && activeRows[actCursor] < nextOffset) {
+    while (actCursor < activeRows.length && activeRows[actCursor] < nextOffset) {
       actCursor += 1;
     }
     if (actCursor > actStart) {
@@ -377,6 +369,14 @@ function accumulateActiveSlice(slice, row, weight, out, outBase) {
   }
 }
 
+function clampReluRange(arr, startIdx, endIdx) {
+  for (let idx = startIdx; idx < endIdx; idx += 1) {
+    if (arr[idx] < 0) {
+      arr[idx] = 0;
+    }
+  }
+}
+
 function linearSparseParts(arrays, dims, numRows, weight, biasVec, applyRelu) {
   const outDim = weight.cols;
   const out = new Float32Array(numRows * outDim);
@@ -391,11 +391,7 @@ function linearSparseParts(arrays, dims, numRows, weight, biasVec, applyRelu) {
       accumulateActiveSlice(slices[idx], row, weight, out, outBase);
     }
     if (applyRelu) {
-      for (let col = 0; col < outDim; col += 1) {
-        if (out[outBase + col] < 0) {
-          out[outBase + col] = 0;
-        }
-      }
+      clampReluRange(out, outBase, outBase + outDim);
     }
   }
   return out;
@@ -405,21 +401,9 @@ function linearSparse(input, numRows, weight, biasVec, applyRelu) {
   return linearSparseParts([input], [weight.rows], numRows, weight, biasVec, applyRelu);
 }
 
-function applyConvTap(cells, out, lineCellBase, numCols, inChannels, outChannels, tapMat, shift) {
-  const { rowOffsets, colIndices, values, activeRows } = tapMat;
-  const colStart = Math.max(0, -shift);
-  const colEnd = Math.min(numCols, numCols - shift);
-
-  for (let col = colStart; col < colEnd; col += 1) {
-    const srcBase = (lineCellBase + col + shift) * inChannels;
-    const dstBase = (lineCellBase + col) * outChannels;
-    accumulateSparseRow(cells, srcBase, activeRows, out, dstBase, rowOffsets, colIndices, values);
-  }
-}
-
-function accumulateSparseRow(input, srcBase, activeRows, out, dstBase, rowOffsets, colIndices, values) {
-  const numActive = activeRows.length;
-  for (let actIdx = 0; actIdx < numActive; actIdx += 1) {
+function accumulateSparseRow(input, srcBase, tapMat, out, dstBase) {
+  const { activeRows, rowOffsets, colIndices, values } = tapMat;
+  for (let actIdx = 0; actIdx < activeRows.length; actIdx += 1) {
     const inIdx = activeRows[actIdx];
     const inVal = input[srcBase + inIdx];
     if (inVal === 0) {
@@ -432,36 +416,39 @@ function accumulateSparseRow(input, srcBase, activeRows, out, dstBase, rowOffset
   }
 }
 
+function applyConvTap(cells, out, lineCellBase, numCols, convWeight, tapIdx, shift) {
+  const { inChannels, outChannels, taps } = convWeight;
+  const tapMat = taps[tapIdx];
+  const colStart = Math.max(0, -shift);
+  const colEnd = Math.min(numCols, numCols - shift);
+
+  for (let col = colStart; col < colEnd; col += 1) {
+    const srcBase = (lineCellBase + col + shift) * inChannels;
+    const dstBase = (lineCellBase + col) * outChannels;
+    accumulateSparseRow(cells, srcBase, tapMat, out, dstBase);
+  }
+}
+
 function conv1dGrid(cells, numLines, numCols, convWeight, biasVec, applyRelu, colLimits) {
-  const { kSize, inChannels, outChannels, taps } = convWeight;
+  const { kSize, outChannels, taps } = convWeight;
   const pad = (kSize - 1) >> 1;
-  const totalCells = numLines * numCols;
-  const out = new Float32Array(totalCells * outChannels);
+  const out = new Float32Array(numLines * numCols * outChannels);
 
   for (let row = 0; row < numLines; row += 1) {
     const rowCols = colLimits ? colLimits[row] : numCols;
     const lineCellBase = row * numCols;
     if (biasVec) {
       for (let col = 0; col < rowCols; col += 1) {
-        const base = (lineCellBase + col) * outChannels;
-        for (let chan = 0; chan < outChannels; chan += 1) {
-          out[base + chan] = biasVec[chan];
-        }
+        out.set(biasVec, (lineCellBase + col) * outChannels);
       }
     }
     for (let tap = 0; tap < kSize; tap += 1) {
       if (taps[tap].nonZeroCount > 0 && rowCols > 0) {
-        applyConvTap(cells, out, lineCellBase, rowCols, inChannels, outChannels, taps[tap], tap - pad);
+        applyConvTap(cells, out, lineCellBase, rowCols, convWeight, tap, tap - pad);
       }
     }
     if (applyRelu) {
-      const startIdx = lineCellBase * outChannels;
-      const endIdx = (lineCellBase + rowCols) * outChannels;
-      for (let idx = startIdx; idx < endIdx; idx += 1) {
-        if (out[idx] < 0) {
-          out[idx] = 0;
-        }
-      }
+      clampReluRange(out, lineCellBase * outChannels, (lineCellBase + rowCols) * outChannels);
     }
   }
   return out;
@@ -477,15 +464,13 @@ function causalLinePrefix(causalMat, projData, numLines, width, projDim) {
     const lineBase = line * width * projDim;
     for (let col = 0; col < width; col += 1) {
       const cellBase = lineBase + col * projDim;
-      if (includeDiag) {
-        for (let chan = 0; chan < projDim; chan += 1) {
-          running[chan] += projData[cellBase + chan];
+      for (let chan = 0; chan < projDim; chan += 1) {
+        if (!includeDiag) {
           out[cellBase + chan] = running[chan];
         }
-      } else {
-        for (let chan = 0; chan < projDim; chan += 1) {
+        running[chan] += projData[cellBase + chan];
+        if (includeDiag) {
           out[cellBase + chan] = running[chan];
-          running[chan] += projData[cellBase + chan];
         }
       }
     }
@@ -494,21 +479,14 @@ function causalLinePrefix(causalMat, projData, numLines, width, projDim) {
 }
 
 function concatLastAxis(arrays, dims, numRows) {
-  let totalDim = 0;
-  for (let idx = 0; idx < dims.length; idx += 1) {
-    totalDim += dims[idx];
-  }
+  const totalDim = dims.reduce((acc, dim) => acc + dim, 0);
   const merged = new Float32Array(numRows * totalDim);
   let colStart = 0;
   for (let part = 0; part < arrays.length; part += 1) {
     const src = arrays[part];
     const partDim = dims[part];
     for (let row = 0; row < numRows; row += 1) {
-      const dstBase = row * totalDim + colStart;
-      const srcBase = row * partDim;
-      for (let chan = 0; chan < partDim; chan += 1) {
-        merged[dstBase + chan] = src[srcBase + chan];
-      }
+      merged.set(src.subarray(row * partDim, (row + 1) * partDim), row * totalDim + colStart);
     }
     colStart += partDim;
   }
@@ -516,13 +494,7 @@ function concatLastAxis(arrays, dims, numRows) {
 }
 
 function compactCells(cells, totalCells, inChannels) {
-  let nonZero = 0;
-  for (let idx = 0; idx < cells.length; idx += 1) {
-    if (cells[idx] !== 0) {
-      nonZero += 1;
-    }
-  }
-
+  const nonZero = countNonZero(cells);
   const offsets = new Int32Array(totalCells + 1);
   const chans = new Int32Array(nonZero);
   const vals = new Float32Array(nonZero);
@@ -599,9 +571,8 @@ function sumLineCells(sparseCells, numLines, width, numChannels) {
   const sums = new Float32Array(numLines * numChannels);
   for (let line = 0; line < numLines; line += 1) {
     const dstBase = line * numChannels;
-    const startIdx = offsets[line * width];
     const endIdx = offsets[(line + 1) * width];
-    for (let idx = startIdx; idx < endIdx; idx += 1) {
+    for (let idx = offsets[line * width]; idx < endIdx; idx += 1) {
       sums[dstBase + chans[idx]] += vals[idx];
     }
   }
@@ -743,17 +714,8 @@ function sinkAttention(state, numLines, wq, wk, wv, wo, bRel, bSink) {
       continue;
     }
     const headCfg = {
-      qkTotal,
-      valTotal,
-      headDim,
-      valDim,
-      invScale,
-      qkHeadOff,
-      valHeadOff,
-      relBase,
-      bRel,
-      sinkLogit: bSink[head],
-      hasQuery,
+      qkTotal, valTotal, headDim, valDim, invScale,
+      qkHeadOff, valHeadOff, relBase, bRel, sinkLogit: bSink[head], hasQuery,
     };
     for (let qLine = 0; qLine < numLines; qLine += 1) {
       attendHeadQuery(qLine, numLines, headCfg, qProj, kProj, vProj, merged, logits, validKeys);
@@ -856,7 +818,6 @@ function computePeakWindowVectors(state, activeGate, numLines, stateDim, docVec)
     const gateVal = activeGate[row];
     prefixG[row + 1] = prefixG[row] + gateVal;
     const srcBase = row * stateDim;
-    const prevBase = row * stateDim;
     const dstBase = (row + 1) * stateDim;
     for (let chan = 0; chan < stateDim; chan += 1) {
       const val = state[srcBase + chan];
@@ -864,7 +825,7 @@ function computePeakWindowVectors(state, activeGate, numLines, stateDim, docVec)
       const prevMax = prevRow1[chan] > prevRow2[chan] ? prevRow1[chan] : prevRow2[chan];
       const overlap = rawPos < prevMax ? rawPos : prevMax;
       const damped = numLines > 1 ? rawPos - contDrop * overlap : rawPos;
-      prefixW[dstBase + chan] = prefixW[prevBase + chan] + damped;
+      prefixW[dstBase + chan] = prefixW[srcBase + chan] + damped;
       prevRow2[chan] = prevRow1[chan];
       prevRow1[chan] = rawPos;
     }
@@ -872,8 +833,7 @@ function computePeakWindowVectors(state, activeGate, numLines, stateDim, docVec)
 
   for (let hiIdx = 1; hiIdx <= numLines; hiIdx += 1) {
     const loIdx = Math.max(0, hiIdx - PEAK_WINDOW);
-    const winGate = Math.max(prefixG[hiIdx] - prefixG[loIdx], PEAK_MIN_GATE) + PEAK_PRIOR;
-    const invDenom = 1.0 / winGate;
+    const invDenom = 1.0 / (Math.max(prefixG[hiIdx] - prefixG[loIdx], PEAK_MIN_GATE) + PEAK_PRIOR);
     const hiBase = hiIdx * stateDim;
     const loBase = loIdx * stateDim;
     for (let chan = 0; chan < stateDim; chan += 1) {
@@ -885,7 +845,7 @@ function computePeakWindowVectors(state, activeGate, numLines, stateDim, docVec)
   }
 }
 
-export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
+function fuseBlock0Cells(params, grid, lines, numLines, width) {
   const totalCells = numLines * width;
   const embDim = params.tok_emb.cols;
   const emb = new Float32Array(totalCells * embDim);
@@ -904,16 +864,13 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
     }
   }
 
-  const lex = conv1dGrid(emb, numLines, width, params.pre_conv3_w, params.pre_conv3_b.data, true);
+  const lex = conv1dGrid(
+    emb, numLines, width, params.pre_conv3_w, params.pre_conv3_b.data, true
+  );
   const lexDim = params.pre_conv3_w.outChannels;
   const prefDim = params.pref1_proj.cols;
   const pref1In = linearSparseParts(
-    [emb, lex],
-    [embDim, lexDim],
-    totalCells,
-    params.pref1_proj,
-    null,
-    false,
+    [emb, lex], [embDim, lexDim], totalCells, params.pref1_proj, null, false
   );
   const prefix1 = causalLinePrefix(params.W_causal1, pref1In, numLines, width, prefDim);
 
@@ -926,7 +883,9 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
     true,
   );
   const pref2In = linearSparse(gates, totalCells, params.pref2_proj, null, false);
-  const prefix2 = causalLinePrefix(params.W_causal2, pref2In, numLines, width, params.pref2_proj.cols);
+  const prefix2 = causalLinePrefix(
+    params.W_causal2, pref2In, numLines, width, params.pref2_proj.cols
+  );
 
   const fuseDims = [embDim, lexDim, params.gate1_w.cols, params.pref2_proj.cols];
   const cells = linearSparseParts(
@@ -938,30 +897,29 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
     true,
   );
   const hcDim = params.col_fuse_w.cols;
-  const cellMasks = extractCellMasks(cells, lines, numLines, width, hcDim);
-  const sparseCells = compactCells(cells, totalCells, hcDim);
+  return {
+    cellMasks: extractCellMasks(cells, lines, numLines, width, hcDim),
+    sparseCells: compactCells(cells, totalCells, hcDim),
+    hcDim,
+  };
+}
 
+function buildBlock1State(params, sparseCells, hcDim, lines, numLines, width) {
   const colLimits = new Int32Array(numLines);
   for (let row = 0; row < numLines; row += 1) {
     const len = lines[row].length;
     colLimits[row] = len === 0 ? 0 : Math.min(width, len + 13);
   }
 
-  const conv3Sum = conv1dSumColumns(
-    sparseCells, numLines, width, params.conv3_w, params.conv3_b.data, null,
+  const sumBank = (name, limits = colLimits) => conv1dSumColumns(
+    sparseCells, numLines, width, params[`${name}_w`], params[`${name}_b`].data, limits
   );
-  const conv7Sum = conv1dSumColumns(
-    sparseCells, numLines, width, params.conv7_w, params.conv7_b.data, colLimits,
-  );
-  const conv13Sum = conv1dSumColumns(
-    sparseCells, numLines, width, params.conv13_w, params.conv13_b.data, colLimits,
-  );
-
+  const conv3Sum = sumBank("conv3", null);
+  const conv7Sum = sumBank("conv7");
+  const conv13Sum = sumBank("conv13");
+  const rawSketch = sumBank("sketch");
   const cellSums = sumLineCells(sparseCells, numLines, width, hcDim);
   const colSums = linearSparse(cellSums, numLines, params.col_sum_proj, null, false);
-  const rawSketch = conv1dSumColumns(
-    sparseCells, numLines, width, params.sketch_w, params.sketch_b.data, colLimits,
-  );
 
   const rawArrays = [colSums, conv3Sum, conv7Sum, conv13Sum];
   const rawDims = [
@@ -973,93 +931,43 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
   let featArrays = rawArrays;
   let featDims = rawDims;
   if (params.ml_proj) {
-    const mlDeltas = linearSparseParts(rawArrays, rawDims, numLines, params.ml_proj, null, false);
+    const mlDeltas = linearSparseParts(
+      rawArrays, rawDims, numLines, params.ml_proj, null, false
+    );
     const mlExcl = exclusiveLinePrefix(mlDeltas, numLines, params.ml_proj.cols);
     const mlSaw = linearSparse(
-      mlExcl, numLines, params.ml_gate_w, params.ml_gate_b.data, true,
+      mlExcl, numLines, params.ml_gate_w, params.ml_gate_b.data, true
     );
     const parenSuf = conv1dGrid(
-      mlDeltas, 1, numLines, params.ml_paren_w, params.ml_paren_b.data, true,
+      mlDeltas, 1, numLines, params.ml_paren_w, params.ml_paren_b.data, true
     );
     featArrays = [...rawArrays, mlSaw, parenSuf];
     featDims = [...rawDims, params.ml_gate_w.cols, params.ml_paren_w.outChannels];
   }
 
   const lineHidden = linearSparseParts(
-    featArrays,
-    featDims,
-    numLines,
-    params.lmlp1_w,
-    params.lmlp1_b.data,
-    true,
+    featArrays, featDims, numLines, params.lmlp1_w, params.lmlp1_b.data, true
   );
-  const lineStats = linearSparse(lineHidden, numLines, params.lmlp2_w, params.lmlp2_b.data, false);
+  const lineStats = linearSparse(
+    lineHidden, numLines, params.lmlp2_w, params.lmlp2_b.data, false
+  );
   const totalSketch = params.sketch_w.outChannels;
   const normSketches = normalizeSketchSlices(rawSketch, numLines, totalSketch);
-  let state = concatLastAxis([lineStats, normSketches], [params.lmlp2_w.cols, totalSketch], numLines);
+  return concatLastAxis(
+    [lineStats, normSketches], [params.lmlp2_w.cols, totalSketch], numLines
+  );
+}
 
-  for (const layer of ["1", "2"]) {
-    const attnDelta = sinkAttention(
-      state,
-      numLines,
-      params[`attn${layer}_wq`],
-      params[`attn${layer}_wk`],
-      params[`attn${layer}_wv`],
-      params[`attn${layer}_wo`],
-      params[`attn${layer}_brel`].data,
-      params[`attn${layer}_bsink`].data,
-    );
-    for (let idx = 0; idx < state.length; idx += 1) {
-      state[idx] += attnDelta[idx];
-    }
-
-    const ctxHidden = linearSparse(
-      state,
-      numLines,
-      params[`cmlp${layer}_w`],
-      params[`cmlp${layer}_b`].data,
-      true,
-    );
-    const ctxDelta = linearSparse(
-      ctxHidden,
-      numLines,
-      params[`cmlp${layer}_2_w`],
-      params[`cmlp${layer}_2_b`].data,
-      false,
-    );
-    for (let idx = 0; idx < state.length; idx += 1) {
-      state[idx] += ctxDelta[idx];
-    }
-  }
-
-  const sqLogits = linearSparse(state, numLines, params.sq_w, params.sq_b.data, false);
-  const lineProbs = new Float32Array(sqLogits.length);
-  for (let idx = 0; idx < sqLogits.length; idx += 1) {
-    lineProbs[idx] = sigmoidScalar(sqLogits[idx]);
-  }
-
-  const gateLogits = linearSparse(state, numLines, params.pool_gate_w, params.pool_gate_b.data, false);
-  const activeGate = new Float32Array(numLines);
-  let gateSum = params.ml_proj ? PRIOR_LINES : 1e-5;
-  for (let row = 0; row < numLines; row += 1) {
-    const gateVal = sigmoidScalar(gateLogits[row]);
-    activeGate[row] = gateVal;
-    gateSum += gateVal;
-  }
-
-  const stateDim = params.sq_w.rows;
-  if (params.ml_proj) {
-    applyDocstringCellMasks(state, numLines, stateDim, width, lines, cellMasks);
-  }
-
+function poolDocumentVector(params, state, activeGate, gateSum, numLines, stateDim) {
   const docVec = new Float32Array(stateDim * 2);
+  const hasMl = Boolean(params.ml_proj);
   for (let row = 0; row < numLines; row += 1) {
     const gateVal = activeGate[row];
     const rowBase = row * stateDim;
     for (let chan = 0; chan < stateDim; chan += 1) {
       const val = state[rowBase + chan];
       docVec[chan] += val * gateVal;
-      if (!params.ml_proj) {
+      if (!hasMl) {
         const posWeighted = val > 0 ? val * gateVal : 0.0;
         if (posWeighted > docVec[stateDim + chan]) {
           docVec[stateDim + chan] = posWeighted;
@@ -1070,15 +978,13 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
   for (let chan = 0; chan < stateDim; chan += 1) {
     docVec[chan] /= gateSum;
   }
-  if (params.ml_proj) {
+  if (hasMl) {
     computePeakWindowVectors(state, activeGate, numLines, stateDim, docVec);
   }
+  return docVec;
+}
 
-  const docHidden = linearSparse(docVec, 1, params.doc1_w, params.doc1_b.data, true);
-  const logits = linearSparse(docHidden, 1, params.doc2_w, params.doc2_b.data, false);
-  const overallScore = sigmoidScalar(logits[0]);
-  const rlHygiene = sigmoidScalar(logits[1]);
-
+function decodeDocumentHeads(logits) {
   const subscores = {};
   for (let idx = 0; idx < SCORE_NAMES.length; idx += 1) {
     const levelProbs = softmaxSlice(logits, 2 + idx * 4, 4);
@@ -1099,13 +1005,69 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
       bestArchIdx = idx;
     }
   }
-
   return {
-    score: overallScore,
-    rlHygiene,
+    score: sigmoidScalar(logits[0]),
+    rlHygiene: sigmoidScalar(logits[1]),
     scores: subscores,
     archetype: ARCHETYPE_NAMES[bestArchIdx],
     archetypeProbs,
+  };
+}
+
+function addInPlace(dst, delta) {
+  for (let idx = 0; idx < dst.length; idx += 1) {
+    dst[idx] += delta[idx];
+  }
+}
+
+export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
+  const { cellMasks, sparseCells, hcDim } = fuseBlock0Cells(
+    params, grid, lines, numLines, width
+  );
+  const state = buildBlock1State(params, sparseCells, hcDim, lines, numLines, width);
+
+  for (const layer of ["1", "2"]) {
+    addInPlace(state, sinkAttention(
+      state, numLines,
+      params[`attn${layer}_wq`], params[`attn${layer}_wk`],
+      params[`attn${layer}_wv`], params[`attn${layer}_wo`],
+      params[`attn${layer}_brel`].data, params[`attn${layer}_bsink`].data
+    ));
+    const ctxHidden = linearSparse(
+      state, numLines, params[`cmlp${layer}_w`], params[`cmlp${layer}_b`].data, true
+    );
+    const ctxDelta = linearSparse(
+      ctxHidden, numLines, params[`cmlp${layer}_2_w`], params[`cmlp${layer}_2_b`].data, false
+    );
+    addInPlace(state, ctxDelta);
+  }
+
+  const sqLogits = linearSparse(state, numLines, params.sq_w, params.sq_b.data, false);
+  const lineProbs = new Float32Array(sqLogits.length);
+  for (let idx = 0; idx < sqLogits.length; idx += 1) {
+    lineProbs[idx] = sigmoidScalar(sqLogits[idx]);
+  }
+
+  const gateLogits = linearSparse(
+    state, numLines, params.pool_gate_w, params.pool_gate_b.data, false
+  );
+  const activeGate = new Float32Array(numLines);
+  let gateSum = params.ml_proj ? PRIOR_LINES : 1e-5;
+  for (let row = 0; row < numLines; row += 1) {
+    activeGate[row] = sigmoidScalar(gateLogits[row]);
+    gateSum += activeGate[row];
+  }
+
+  const stateDim = params.sq_w.rows;
+  if (params.ml_proj) {
+    applyDocstringCellMasks(state, numLines, stateDim, width, lines, cellMasks);
+  }
+
+  const docVec = poolDocumentVector(params, state, activeGate, gateSum, numLines, stateDim);
+  const docHidden = linearSparse(docVec, 1, params.doc1_w, params.doc1_b.data, true);
+  const logits = linearSparse(docHidden, 1, params.doc2_w, params.doc2_b.data, false);
+  return {
+    ...decodeDocumentHeads(logits),
     lineProbs,
     activeGate,
     cellMasks,
@@ -1153,8 +1115,7 @@ export function scoreCode(code, weights, threshold = 0.55) {
   const { grid, lines, numLines, width } = encodeByteGrid(code);
   const raw = forwardModel(weights, grid, lines, numLines, width);
   const squiggles = collectSquiggles(raw, threshold);
-  const elapsedMs = performance.now() - startMs;
-  return { ...raw, squiggles, elapsedMs };
+  return { ...raw, squiggles, elapsedMs: performance.now() - startMs };
 }
 
 function computeSquiggleEventLoad(squiggles, threshold = 0.55) {
@@ -1168,8 +1129,7 @@ function computeSquiggleEventLoad(squiggles, threshold = 0.55) {
 
   for (let idx = 0; idx < squiggles.length; idx += 1) {
     const sq = squiggles[idx];
-    const rawExcess = (sq.probability - threshold) / probSpan;
-    const excess = Math.max(0.0, Math.min(1.0, rawExcess));
+    const excess = Math.max(0.0, Math.min(1.0, (sq.probability - threshold) / probSpan));
     const confWeight = 0.35 + 0.65 * excess;
     const lastLine = prevLine[sq.kind] ?? -10;
     let spanMult = 1.0;
@@ -1181,8 +1141,7 @@ function computeSquiggleEventLoad(squiggles, threshold = 0.55) {
       spanLen[sq.kind] = 1;
     }
     prevLine[sq.kind] = sq.line;
-    const severity = RL_KIND_SEVERITY[sq.kind] ?? 0.25;
-    load += severity * confWeight * spanMult;
+    load += (RL_KIND_SEVERITY[sq.kind] ?? 0.25) * confWeight * spanMult;
   }
   return load;
 }
@@ -1200,20 +1159,15 @@ export function computeRlReward(result, testsPassed = true, weight = 0.25, hygie
 
 export function formatJsonResult(result) {
   const round4 = (val) => Math.round(val * 10000) / 10000;
-  const scores = {};
-  for (const [key, val] of Object.entries(result.scores)) {
-    scores[key] = round4(val);
-  }
-  const archetypeProbs = {};
-  for (const [key, val] of Object.entries(result.archetypeProbs)) {
-    archetypeProbs[key] = round4(val);
-  }
+  const roundEntries = (obj) => Object.fromEntries(
+    Object.entries(obj).map(([key, val]) => [key, round4(val)])
+  );
   return {
     score: round4(result.score),
     rl_hygiene: round4(result.rlHygiene),
-    scores,
+    scores: roundEntries(result.scores),
     archetype: result.archetype,
-    archetype_probs: archetypeProbs,
+    archetype_probs: roundEntries(result.archetypeProbs),
     squiggles: result.squiggles.map((sq) => ({
       ...sq,
       probability: round4(sq.probability),

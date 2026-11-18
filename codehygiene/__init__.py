@@ -1,23 +1,36 @@
-"""1.58-bit ternary weight-space programmed System One model for code readability and hygiene."""
+"""codehygiene v0.6.1 — 1.58-bit ternary System One model for code readability and hygiene."""
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
-from functools import lru_cache
 import json
 import math
 import os
-from pathlib import Path
 import sys
+from dataclasses import asdict, dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
+
 import numpy as np
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 __all__ = [
-    "ARCHETYPE_NAMES", "MAX_COLS", "MAX_REL_DIST", "Result", "SCORE_NAMES",
-    "SQUIGGLE_KINDS", "SQUIGGLE_MESSAGES", "Squiggle", "encode_byte_grid",
-    "lint", "load_weights", "main", "render_report", "rl_reward", "score",
+    "ARCHETYPE_NAMES",
+    "MAX_COLS",
+    "MAX_REL_DIST",
+    "SCORE_NAMES",
+    "SQUIGGLE_KINDS",
+    "SQUIGGLE_MESSAGES",
+    "Result",
+    "Squiggle",
+    "encode_byte_grid",
+    "lint",
+    "load_weights",
+    "main",
+    "render_report",
+    "rl_reward",
+    "score",
     "unpack_ternary_archive",
 ]
 
@@ -66,17 +79,12 @@ _RL_KIND_SEVERITY = {
     "cramped_layout": 0.025,
 }
 
-SCORE_NAMES = (
-    "flatness", "naming", "simplicity",
-    "comments", "error_handling", "layout",
-)
-ARCHETYPE_NAMES = (
-    "minimal", "clean", "enterprise",
-    "dense", "slop",
-)
+SCORE_NAMES = ("flatness", "naming", "simplicity", "comments", "error_handling", "layout")
+ARCHETYPE_NAMES = ("minimal", "clean", "enterprise", "dense", "slop")
 _N_SCORES = len(SCORE_NAMES)
 _SCORE_LOGIT_END = 2 + 4 * _N_SCORES
 _STYLE_LOGIT_END = _SCORE_LOGIT_END + len(ARCHETYPE_NAMES)
+_CONV_BANKS = ("conv3", "conv7", "conv13", "sketch")
 
 _LEVELS = np.array([0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0], dtype=np.float32)
 _ANSI = ("\033[1m", "\033[2m", "\033[33m", "\033[36m", "\033[32m", "\033[31m", "\033[0m")
@@ -103,15 +111,30 @@ class Result:
     line_probs: np.ndarray
 
     def to_dict(self) -> dict[str, Any]:
-        items = [{**asdict(sq), "probability": round(sq.probability, 4)} for sq in self.squiggles]
+        items = [
+            {**asdict(sq), "probability": round(sq.probability, 4)}
+            for sq in self.squiggles
+        ]
         return {
             "score": round(self.score, 4),
             "rl_hygiene": round(self.rl_hygiene, 4),
             "scores": {name: round(val, 4) for name, val in self.scores.items()},
             "archetype": self.archetype,
-            "archetype_probs": {name: round(val, 4) for name, val in self.archetype_probs.items()},
+            "archetype_probs": {
+                name: round(val, 4) for name, val in self.archetype_probs.items()
+            },
             "squiggles": items,
         }
+
+
+@dataclass(frozen=True)
+class _ActiveSpans:
+    nonblank: np.ndarray
+    span_lens: np.ndarray
+    line_starts: np.ndarray
+    line_ids: np.ndarray
+    within_col: np.ndarray
+    total_active: int
 
 
 def _relu(arr: np.ndarray) -> np.ndarray:
@@ -160,8 +183,7 @@ def _ribbon_conv_sum(
     rib_cells: np.ndarray,
     rib_starts: np.ndarray,
     rib_pos: np.ndarray,
-    line_starts: np.ndarray,
-    total_active: int,
+    spans: _ActiveSpans,
     kernel: np.ndarray,
     bias: np.ndarray,
 ) -> np.ndarray:
@@ -170,61 +192,64 @@ def _ribbon_conv_sum(
     active_in = np.flatnonzero(np.any(kernel != 0, axis=(0, 2)))
     n_in = len(active_in)
     sub_cells = np.ascontiguousarray(rib_cells[:, active_in])
-    flat_kern = np.ascontiguousarray(kernel[:, active_in, :].reshape(k_size * n_in, out_channels))
+    flat_kern = np.ascontiguousarray(
+        kernel[:, active_in, :].reshape(k_size * n_in, out_channels)
+    )
 
+    line_starts = spans.line_starts
     num_nb = len(line_starts)
     out = np.empty((num_nb, out_channels), dtype=np.float32)
-    chunk_lines = 128
-    for s_ln in range(0, num_nb, chunk_lines):
-        e_ln = min(s_ln + chunk_lines, num_nb)
+    for s_ln in range(0, num_nb, 128):
+        e_ln = min(s_ln + 128, num_nb)
         cell_lo = int(line_starts[s_ln])
-        cell_hi = int(line_starts[e_ln]) if e_ln < num_nb else total_active
+        cell_hi = int(line_starts[e_ln]) if e_ln < num_nb else spans.total_active
         rib_lo = int(rib_starts[s_ln]) - pad
         rib_hi = int(rib_starts[e_ln]) + pad
         valid_len = rib_hi - rib_lo - (k_size - 1)
 
-        base_cells = sub_cells[rib_lo:rib_hi]
-        windows = np.lib.stride_tricks.sliding_window_view(base_cells, k_size, axis=0)
-        col_mat = np.ascontiguousarray(windows.transpose(0, 2, 1)).reshape(valid_len, k_size * n_in)
+        windows = np.lib.stride_tricks.sliding_window_view(
+            sub_cells[rib_lo:rib_hi], k_size, axis=0
+        )
+        col_mat = np.ascontiguousarray(windows.transpose(0, 2, 1)).reshape(
+            valid_len, k_size * n_in
+        )
         conv_out = col_mat @ flat_kern + bias
         local_pos = rib_pos[cell_lo:cell_hi] - (rib_lo + pad)
         active_out = np.maximum(conv_out[local_pos], 0.0)
-        local_starts = line_starts[s_ln:e_ln] - cell_lo
-        out[s_ln:e_ln] = np.add.reduceat(active_out, local_starts, axis=0)
+        out[s_ln:e_ln] = np.add.reduceat(
+            active_out, line_starts[s_ln:e_ln] - cell_lo, axis=0
+        )
     return out
 
 
-def _block01_active_lines(
-    params: dict[str, np.ndarray],
-    grid: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Run Block 0 masking and Block 1 k=3/7/13/sketch convolutions on occupied cell spans."""
-    num_lines, max_width = grid.shape
+def _extract_active_spans(grid: np.ndarray) -> _ActiveSpans | None:
+    _, max_width = grid.shape
     col_pos = np.arange(1, max_width + 1, dtype=np.int32)[None, :]
     row_lens = np.max(np.where(grid != 0, col_pos, 0), axis=1)
     nonblank = np.flatnonzero(row_lens > 0)
-
-    col_sums = np.zeros((num_lines, params["col_sum_proj"].shape[1]), dtype=np.float32)
-    conv3 = np.zeros((num_lines, params["conv3_w"].shape[2]), dtype=np.float32)
-    conv7 = np.zeros((num_lines, params["conv7_w"].shape[2]), dtype=np.float32)
-    conv13 = np.zeros((num_lines, params["conv13_w"].shape[2]), dtype=np.float32)
-    raw_sketch = np.zeros((num_lines, params["sketch_w"].shape[2]), dtype=np.float32)
     if len(nonblank) == 0:
-        return col_sums, conv3, conv7, conv13, raw_sketch
+        return None
 
     span_lens = np.minimum(max_width, row_lens[nonblank] + _RIBBON_GUARD)
     line_starts = np.cumsum(span_lens) - span_lens
     total_active = int(np.sum(span_lens))
     line_ids = np.repeat(np.arange(len(nonblank), dtype=np.int32), span_lens)
     within_col = np.arange(total_active, dtype=np.int32) - line_starts[line_ids]
+    return _ActiveSpans(
+        nonblank, span_lens, line_starts, line_ids, within_col, total_active
+    )
 
-    codes = grid[nonblank[line_ids], within_col]
-    emb_act = params["tok_emb"][codes] + params["col_emb"][within_col]
 
-    pre_starts = np.empty(len(nonblank) + 1, dtype=np.int32)
+def _fuse_block0_cells(
+    params: dict[str, np.ndarray], grid: np.ndarray, spans: _ActiveSpans
+) -> np.ndarray:
+    codes = grid[spans.nonblank[spans.line_ids], spans.within_col]
+    emb_act = params["tok_emb"][codes] + params["col_emb"][spans.within_col]
+
+    pre_starts = np.empty(len(spans.nonblank) + 1, dtype=np.int32)
     pre_starts[0] = 1
-    np.cumsum(span_lens + 1, out=pre_starts[1:])
-    pre_pos = pre_starts[:-1][line_ids] + within_col
+    np.cumsum(spans.span_lens + 1, out=pre_starts[1:])
+    pre_pos = pre_starts[:-1][spans.line_ids] + spans.within_col
     rib_emb = np.zeros((int(pre_starts[-1]) + 1, emb_act.shape[1]), dtype=np.float32)
     rib_emb[pre_pos] = emb_act
 
@@ -235,49 +260,59 @@ def _block01_active_lines(
         lex_rib += rib_emb[offset : offset + lex_len] @ pre_w[offset]
     lex_act = np.maximum(lex_rib[pre_pos - 1], 0.0)
 
-    has_prev = (line_starts > 0)[:, None]
-    prev_idx = np.maximum(line_starts - 1, 0)
+    has_prev = (spans.line_starts > 0)[:, None]
+    prev_idx = np.maximum(spans.line_starts - 1, 0)
     pref1_in = np.concatenate([emb_act, lex_act], axis=-1) @ params["pref1_proj"]
     pref1_cs = np.cumsum(pref1_in, axis=0)
     pref1_base = np.where(has_prev, pref1_cs[prev_idx], 0.0)
-    prefix1 = pref1_cs - pref1_base[line_ids] - pref1_in
+    prefix1 = pref1_cs - pref1_base[spans.line_ids] - pref1_in
 
     gate_in = np.concatenate([emb_act, lex_act, prefix1], axis=-1)
     gates = np.maximum(gate_in @ params["gate1_w"] + params["gate1_b"], 0.0)
     pref2_in = gates @ params["pref2_proj"]
     pref2_cs = np.cumsum(pref2_in, axis=0)
     pref2_base = np.where(has_prev, pref2_cs[prev_idx], 0.0)
-    prefix2 = pref2_cs - pref2_base[line_ids]
+    prefix2 = pref2_cs - pref2_base[spans.line_ids]
 
     fuse_in = np.concatenate([emb_act, lex_act, gates, prefix2], axis=-1)
-    cells_act = np.maximum(fuse_in @ params["col_fuse_w"] + params["col_fuse_b"], 0.0)
-    col_sums[nonblank] = np.add.reduceat(cells_act, line_starts, axis=0) @ params["col_sum_proj"]
+    return np.maximum(fuse_in @ params["col_fuse_w"] + params["col_fuse_b"], 0.0)
 
-    rib_starts = np.empty(len(nonblank) + 1, dtype=np.int32)
+
+def _block01_active_lines(
+    params: dict[str, np.ndarray],
+    grid: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Run Block 0 masking and Block 1 k=3/7/13/sketch convolutions on occupied spans."""
+    num_lines = grid.shape[0]
+    col_sums = np.zeros((num_lines, params["col_sum_proj"].shape[1]), dtype=np.float32)
+    banks = {
+        name: np.zeros((num_lines, params[f"{name}_w"].shape[2]), dtype=np.float32)
+        for name in _CONV_BANKS
+    }
+    spans = _extract_active_spans(grid)
+    if spans is None:
+        return col_sums, banks["conv3"], banks["conv7"], banks["conv13"], banks["sketch"]
+
+    cells_act = _fuse_block0_cells(params, grid, spans)
+    col_sums[spans.nonblank] = (
+        np.add.reduceat(cells_act, spans.line_starts, axis=0) @ params["col_sum_proj"]
+    )
+
+    rib_starts = np.empty(len(spans.nonblank) + 1, dtype=np.int32)
     rib_starts[0] = _RIBBON_GUARD
-    np.cumsum(span_lens + _RIBBON_GUARD, out=rib_starts[1:])
-    rib_pos = rib_starts[:-1][line_ids] + within_col
-    rib_cells = np.empty((int(rib_starts[-1]) + _RIBBON_GUARD, cells_act.shape[1]), dtype=np.float32)
+    np.cumsum(spans.span_lens + _RIBBON_GUARD, out=rib_starts[1:])
+    rib_pos = rib_starts[:-1][spans.line_ids] + spans.within_col
+    rib_cells = np.empty(
+        (int(rib_starts[-1]) + _RIBBON_GUARD, cells_act.shape[1]), dtype=np.float32
+    )
     rib_cells[:] = np.maximum(params["col_fuse_b"], 0.0)
     rib_cells[rib_pos] = cells_act
 
-    conv3[nonblank] = _ribbon_conv_sum(
-        rib_cells, rib_starts, rib_pos, line_starts, total_active,
-        params["conv3_w"], params["conv3_b"],
-    )
-    conv7[nonblank] = _ribbon_conv_sum(
-        rib_cells, rib_starts, rib_pos, line_starts, total_active,
-        params["conv7_w"], params["conv7_b"],
-    )
-    conv13[nonblank] = _ribbon_conv_sum(
-        rib_cells, rib_starts, rib_pos, line_starts, total_active,
-        params["conv13_w"], params["conv13_b"],
-    )
-    raw_sketch[nonblank] = _ribbon_conv_sum(
-        rib_cells, rib_starts, rib_pos, line_starts, total_active,
-        params["sketch_w"], params["sketch_b"],
-    )
-    return col_sums, conv3, conv7, conv13, raw_sketch
+    for name in _CONV_BANKS:
+        banks[name][spans.nonblank] = _ribbon_conv_sum(
+            rib_cells, rib_starts, rib_pos, spans, params[f"{name}_w"], params[f"{name}_b"]
+        )
+    return col_sums, banks["conv3"], banks["conv7"], banks["conv13"], banks["sketch"]
 
 
 def _attend_banded_heads(
@@ -289,8 +324,7 @@ def _attend_banded_heads(
     banded: list[int],
     inv_scale: np.float32,
 ) -> np.ndarray:
-    num_lines = v_proj.shape[1]
-    val_dim = v_proj.shape[2]
+    num_lines, val_dim = v_proj.shape[1], v_proj.shape[2]
     rad = MAX_REL_DIST
     win = 2 * rad + 1
     num_b = len(banded)
@@ -308,8 +342,9 @@ def _attend_banded_heads(
 
     logits = np.full((num_b, num_lines, win + 1), -1e9, dtype=np.float32)
     logits[:, :, win] = b_sink[banded, None]
-    active_offsets = [off for off in range(-rad + 1, rad) if np.any(rel_sub[:, off + rad] > -1e3)]
-
+    active_offsets = [
+        off for off in range(-rad + 1, rad) if np.any(rel_sub[:, off + rad] > -1e3)
+    ]
     for off in active_offsets:
         q_start, q_end = max(0, -off), min(num_lines, num_lines - off)
         if q_start >= q_end:
@@ -321,26 +356,48 @@ def _attend_banded_heads(
         if q_sub is not None and k_sub is not None:
             h_qk = np.flatnonzero(act_mask & has_q)
             if len(h_qk):
-                dots = np.sum(
-                    q_sub[h_qk, q_start:q_end, :] * k_sub[h_qk, q_start + off : q_end + off, :],
-                    axis=-1,
+                k_win = k_sub[h_qk, q_start + off : q_end + off, :]
+                logits[h_qk, q_start:q_end, slot] += np.sum(
+                    q_sub[h_qk, q_start:q_end, :] * k_win, axis=-1
                 )
-                logits[h_qk, q_start:q_end, slot] += dots
 
     weights = _softmax(logits)
     out = np.zeros((num_b, num_lines, val_dim), dtype=np.float32)
     for off in active_offsets:
         q_start, q_end = max(0, -off), min(num_lines, num_lines - off)
-        if q_start >= q_end:
-            continue
         slot = off + rad
         h_val = np.flatnonzero((rel_sub[:, slot] > -1e3) & has_v)
-        if len(h_val):
+        if q_start < q_end and len(h_val):
             out[h_val, q_start:q_end, :] += (
                 weights[h_val, q_start:q_end, slot : slot + 1]
                 * v_sub[h_val, q_start + off : q_end + off, :]
             )
     return out
+
+
+def _attend_global_head(
+    q_head: np.ndarray | None,
+    k_head: np.ndarray | None,
+    v_head: np.ndarray,
+    b_rel_h: np.ndarray,
+    sink_h: np.float32,
+    qh_zero: bool,
+    inv_scale: np.float32,
+) -> np.ndarray:
+    num_lines = v_head.shape[0]
+    if qh_zero and np.all(b_rel_h == 0.0):
+        weight = np.float32(1.0 / (float(num_lines) + float(np.exp(sink_h))))
+        return v_head.sum(axis=0, keepdims=True) * weight
+
+    line_idx = np.arange(num_lines)
+    raw_diff = line_idx[None, :] - line_idx[:, None]
+    rel_idx = np.clip(raw_diff, -MAX_REL_DIST, MAX_REL_DIST) + MAX_REL_DIST
+    logits_h = b_rel_h[rel_idx].copy()
+    if not qh_zero and q_head is not None and k_head is not None:
+        logits_h += (q_head @ k_head.T) * inv_scale
+    sink_col = np.full((num_lines, 1), sink_h, dtype=np.float32)
+    weights_h = _softmax(np.concatenate([logits_h, sink_col], axis=-1))[:, :num_lines]
+    return weights_h @ v_head
 
 
 def _sink_attn(
@@ -359,41 +416,36 @@ def _sink_attn(
 
     v_proj = (state @ wv).reshape(num_lines, num_heads, val_dim).transpose(1, 0, 2)
     has_qk = bool(np.any(wq != 0) and np.any(wk != 0))
-    q_proj = (state @ wq).reshape(num_lines, num_heads, head_dim).transpose(1, 0, 2) if has_qk else None
-    k_proj = (state @ wk).reshape(num_lines, num_heads, head_dim).transpose(1, 0, 2) if has_qk else None
+    if has_qk:
+        q_proj = (state @ wq).reshape(num_lines, num_heads, head_dim).transpose(1, 0, 2)
+        k_proj = (state @ wk).reshape(num_lines, num_heads, head_dim).transpose(1, 0, 2)
+    else:
+        q_proj = k_proj = None
     inv_scale = np.float32(1.0 / np.sqrt(float(head_dim)))
 
-    banded = [head for head in range(num_heads) if b_rel[head, 0] <= -1e3 and b_rel[head, -1] <= -1e3]
-    global_heads = [head for head in range(num_heads) if head not in banded]
+    banded = [h for h in range(num_heads) if b_rel[h, 0] <= -1e3 and b_rel[h, -1] <= -1e3]
     merged = np.zeros((num_heads, num_lines, val_dim), dtype=np.float32)
-
     if banded:
         merged[banded] = _attend_banded_heads(
             q_proj, k_proj, v_proj, b_rel, b_sink, banded, inv_scale
         )
 
-    for head in global_heads:
+    banded_set = set(banded)
+    for head in range(num_heads):
+        if head in banded_set:
+            continue
         h_slice = slice(head * head_dim, (head + 1) * head_dim)
         qh_zero = (not has_qk) or (not np.any(wq[:, h_slice] != 0))
-        if qh_zero and np.all(b_rel[head] == 0.0):
-            weight = np.float32(1.0 / (float(num_lines) + float(np.exp(b_sink[head]))))
-            merged[head] = v_proj[head].sum(axis=0, keepdims=True) * weight
-            continue
-        line_idx = np.arange(num_lines)
-        raw_dist = line_idx[None, :] - line_idx[:, None]
-        rel_idx = np.clip(raw_dist, -MAX_REL_DIST, MAX_REL_DIST) + MAX_REL_DIST
-        logits_h = b_rel[head, rel_idx].copy()
-        if not qh_zero and q_proj is not None and k_proj is not None:
-            logits_h += (q_proj[head] @ k_proj[head].T) * inv_scale
-        sink_col = np.full((num_lines, 1), b_sink[head], dtype=np.float32)
-        weights_h = _softmax(np.concatenate([logits_h, sink_col], axis=-1))[:, :num_lines]
-        merged[head] = weights_h @ v_proj[head]
-
+        q_h = q_proj[head] if q_proj is not None else None
+        k_h = k_proj[head] if k_proj is not None else None
+        merged[head] = _attend_global_head(
+            q_h, k_h, v_proj[head], b_rel[head], b_sink[head], qh_zero, inv_scale
+        )
     return merged.transpose(1, 0, 2).reshape(num_lines, -1) @ wo
 
 
 def encode_byte_grid(code: str, max_lines: int | None = None) -> tuple[np.ndarray, list[str]]:
-    """Convert raw source text into a (lines, 128) uint8 grid of 7-bit ASCII codes."""
+    """Convert raw source text into a `(lines, 128)` uint8 grid of 7-bit ASCII codes."""
     all_lines = code.expandtabs(2).splitlines() or [""]
     lines = all_lines[:max_lines] if max_lines is not None else all_lines
     grid = np.zeros((len(lines), MAX_COLS), dtype=np.uint8)
@@ -429,22 +481,39 @@ def _peak_window_density(state: np.ndarray, active_gate: np.ndarray) -> np.ndarr
     return ((pad_w[hi_idx] - pad_w[lo_idx]) / win_gate).max(axis=0)
 
 
+def _append_multiline_state(params: dict[str, np.ndarray], raw_feats: np.ndarray) -> np.ndarray:
+    if "ml_proj" not in params:
+        return raw_feats
+    ml_deltas = raw_feats @ params["ml_proj"]
+    ml_excl = np.cumsum(ml_deltas, axis=0) - ml_deltas
+    ml_saw = _relu(ml_excl @ params["ml_gate_w"] + params["ml_gate_b"])
+    paren_suf = _relu(
+        _conv1d(ml_deltas[None, :, :], params["ml_paren_w"], params["ml_paren_b"])[0]
+    )
+    return np.concatenate([raw_feats, ml_saw, paren_suf], axis=-1)
+
+
+def _pool_document_vector(
+    params: dict[str, np.ndarray], state: np.ndarray, active_gate: np.ndarray
+) -> np.ndarray:
+    has_ml = "ml_proj" in params
+    prior_lines = _PRIOR_LINES if has_ml else 1e-5
+    doc_mean = (state * active_gate).sum(axis=0) / (active_gate.sum(axis=0) + prior_lines)
+    doc_max = (
+        _peak_window_density(state, active_gate)
+        if has_ml
+        else (_relu(state) * active_gate).max(axis=0)
+    )
+    return np.concatenate([doc_mean, doc_max], axis=-1)
+
+
 def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarray, ...]:
-    # Blocks 0 & 1: quote/comment masking + k=3/7/13 convolutions + SimHash sketches
+    """Execute the 4-block ternary neural forward pass on an ASCII byte grid."""
     col_sums, conv3, conv7, conv13, raw_sketch = _block01_active_lines(params, grid)
     sketch = _relu(raw_sketch) - _relu(raw_sketch - 1.0)
-    raw_feats = np.concatenate([col_sums, conv3, conv7, conv13], axis=-1)
-
-    if "ml_proj" in params:
-        ml_deltas = raw_feats @ params["ml_proj"]
-        ml_excl = np.cumsum(ml_deltas, axis=0) - ml_deltas
-        ml_saw = _relu(ml_excl @ params["ml_gate_w"] + params["ml_gate_b"])
-        paren_suf = _relu(
-            _conv1d(ml_deltas[None, :, :], params["ml_paren_w"], params["ml_paren_b"])[0]
-        )
-        line_feats = np.concatenate([raw_feats, ml_saw, paren_suf], axis=-1)
-    else:
-        line_feats = raw_feats
+    line_feats = _append_multiline_state(
+        params, np.concatenate([col_sums, conv3, conv7, conv13], axis=-1)
+    )
 
     line_hidden = _relu(line_feats @ params["lmlp1_w"] + params["lmlp1_b"])
     line_stats = line_hidden @ params["lmlp2_w"] + params["lmlp2_b"]
@@ -454,7 +523,6 @@ def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarra
     ]
     state = np.concatenate([line_stats, *sketch_slices], axis=-1)
 
-    # Block 2: two cross-line sink-attention + context-MLP passes over [-32..+32] offsets
     for layer in ("1", "2"):
         state = state + _sink_attn(
             state,
@@ -468,17 +536,9 @@ def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarra
         ctx_hidden = _relu(state @ params[f"cmlp{layer}_w"] + params[f"cmlp{layer}_b"])
         state = state + ctx_hidden @ params[f"cmlp{layer}_2_w"] + params[f"cmlp{layer}_2_b"]
 
-    # Block 3: per-line squiggle probabilities + active-line pooling into System One logits
     line_probs = _sigmoid(state @ params["sq_w"] + params["sq_b"])
     active_gate = _sigmoid(state @ params["pool_gate_w"] + params["pool_gate_b"])
-    prior_lines = _PRIOR_LINES if "ml_proj" in params else 1e-5
-    weighted = state * active_gate
-    doc_mean = weighted.sum(axis=0) / (active_gate.sum(axis=0) + prior_lines)
-    if "ml_proj" in params:
-        doc_max = _peak_window_density(state, active_gate)
-    else:
-        doc_max = (_relu(state) * active_gate).max(axis=0)
-    doc_vec = np.concatenate([doc_mean, doc_max], axis=-1)
+    doc_vec = _pool_document_vector(params, state, active_gate)
     doc_hidden = _relu(doc_vec @ params["doc1_w"] + params["doc1_b"])
     logits = doc_hidden @ params["doc2_w"] + params["doc2_b"]
 
@@ -489,51 +549,47 @@ def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarra
     return line_probs, noul_probs, subscores, style_probs
 
 
+def _parse_archive_entry(entry: str) -> tuple[str, tuple[int, ...], int]:
+    name, dims, count_str = entry.split(":")
+    return name, tuple(int(dim) for dim in dims.split(",")), int(count_str)
+
+
 def unpack_ternary_archive(
     trit_buf: np.ndarray,
     vec_buf: np.ndarray,
     meta_str: str,
 ) -> dict[str, np.ndarray]:
-    """Unpack 5-trit-per-byte {-1, 0, +1} matrices and fold 1D per-channel scales."""
+    """Unpack 5-trit-per-byte `{-1, 0, +1}` matrices and fold 1D per-channel scales."""
     trit_part, vec_part = meta_str.split("|")
     vecs: dict[str, np.ndarray] = {}
     vec_offset = 0
     for entry in vec_part.split(" ; "):
-        name, dims, count_str = entry.split(":")
-        count = int(count_str)
-        shape = tuple(int(dim) for dim in dims.split(","))
+        name, shape, count = _parse_archive_entry(entry)
         vecs[name] = vec_buf[vec_offset : vec_offset + count].reshape(shape).astype(np.float32)
         vec_offset += count
 
     unpacked_digits = (((trit_buf[:, None] // _POW3) % 3 + 1) % 3).astype(np.int8) - 1
     flat_trits = unpacked_digits.ravel()
-    params: dict[str, np.ndarray] = {}
+    params: dict[str, np.ndarray] = {
+        name: val for name, val in vecs.items() if not name.endswith("_s")
+    }
     byte_offset = 0
-
     for entry in trit_part.split(" ; "):
-        name, dims, packed_len_str = entry.split(":")
-        packed_len = int(packed_len_str)
-        shape = tuple(int(dim) for dim in dims.split(","))
-        num_elems = math.prod(shape)
+        name, shape, packed_len = _parse_archive_entry(entry)
         trit_start = byte_offset * 5
-        mat = flat_trits[trit_start : trit_start + num_elems].reshape(shape).astype(np.float32)
+        num_elems = math.prod(shape)
         byte_offset += packed_len
-
-        scale_key = f"{name[:-2]}_s" if name.endswith("_w") else f"{name}_s"
-        if name == "col_sum_proj":
-            scale_key = "col_sum_s"
-        if scale_key in vecs:
-            mat = mat * vecs[scale_key]
-        params[name] = mat
-
-    for name, val in vecs.items():
-        if not name.endswith("_s"):
-            params[name] = val
+        mat = flat_trits[trit_start : trit_start + num_elems].reshape(shape).astype(np.float32)
+        scale_key = "col_sum_s" if name == "col_sum_proj" else (
+            f"{name[:-2]}_s" if name.endswith("_w") else f"{name}_s"
+        )
+        params[name] = mat * vecs[scale_key] if scale_key in vecs else mat
     return params
 
 
 @lru_cache(maxsize=2)
 def load_weights(path: str | Path | None = None) -> dict[str, np.ndarray]:
+    """Load and cache unpacked float32 tensors from `weights.npz`."""
     target = Path(path) if path else Path(__file__).with_name("weights.npz")
     with np.load(target) as archive:
         if "trits" in archive.files:
@@ -543,16 +599,10 @@ def load_weights(path: str | Path | None = None) -> dict[str, np.ndarray]:
         return {name: archive[name].astype(np.float32) for name in archive.files}
 
 
-def score(
-    code: str,
-    *,
-    threshold: float = 0.55,
-    weights: dict[str, np.ndarray] | None = None,
-) -> Result:
-    grid, lines = encode_byte_grid(code)
-    line_probs, heads, subscores, styles = _forward(weights or load_weights(), grid)
+def _collect_squiggles(
+    lines: list[str], line_probs: np.ndarray, threshold: float
+) -> list[Squiggle]:
     squiggles: list[Squiggle] = []
-
     for idx, raw_line in enumerate(lines):
         best_kind = int(np.argmax(line_probs[idx]))
         prob = float(line_probs[idx, best_kind])
@@ -571,19 +621,31 @@ def score(
                 message=SQUIGGLE_MESSAGES[kind],
             )
         )
+    return squiggles
 
+
+def score(
+    code: str,
+    *,
+    threshold: float = 0.55,
+    weights: dict[str, np.ndarray] | None = None,
+) -> Result:
+    """Score `code` and return overall readability, sub-scores, style, and squiggles."""
+    grid, lines = encode_byte_grid(code)
+    line_probs, heads, subscores, styles = _forward(weights or load_weights(), grid)
     return Result(
         score=float(heads[0]),
         rl_hygiene=float(heads[1]),
-        scores=dict(zip(SCORE_NAMES, map(float, subscores))),
+        scores=dict(zip(SCORE_NAMES, map(float, subscores), strict=True)),
         archetype=ARCHETYPE_NAMES[int(np.argmax(styles))],
-        archetype_probs=dict(zip(ARCHETYPE_NAMES, map(float, styles))),
-        squiggles=squiggles,
+        archetype_probs=dict(zip(ARCHETYPE_NAMES, map(float, styles), strict=True)),
+        squiggles=_collect_squiggles(lines, line_probs, threshold),
         line_probs=line_probs,
     )
 
 
 def lint(code: str, *, threshold: float = 0.55) -> list[Squiggle]:
+    """Return active squiggles at or above `threshold`."""
     return score(code, threshold=threshold).squiggles
 
 
@@ -598,8 +660,7 @@ def _squiggle_event_load(squiggles: list[Squiggle], threshold: float = 0.55) -> 
     for sq in squiggles:
         excess = max(0.0, min(1.0, (sq.probability - threshold) / prob_span))
         conf_weight = 0.35 + 0.65 * excess
-        last_line = prev_line.get(sq.kind, -10)
-        if sq.line - last_line <= 2:
+        if sq.line - prev_line.get(sq.kind, -10) <= 2:
             cur_span = span_len[sq.kind] + 1
             span_len[sq.kind] = cur_span
             span_mult = 0.25 * math.log(cur_span / (cur_span - 1.0))
@@ -619,7 +680,7 @@ def _rl_from_result(
 ) -> float:
     blended = (1.0 - hygiene_blend) * res.score + hygiene_blend * res.rl_hygiene
     load = _squiggle_event_load(res.squiggles)
-    squiggle_damp = 1.0 / (1.0 + 1.5 * (load ** 0.85)) if load > 0.0 else 1.0
+    squiggle_damp = 1.0 / (1.0 + 1.5 * (load**0.85)) if load > 0.0 else 1.0
     return 1.0 + weight * blended * squiggle_damp
 
 
@@ -630,6 +691,7 @@ def rl_reward(
     weight: float = 0.25,
     hygiene_blend: float = 0.5,
 ) -> float:
+    """Compute test-gated RL coding reward with telescopic squiggle damping."""
     gate = float(tests_passed)
     if gate <= 0.0:
         return 0.0
@@ -643,6 +705,7 @@ def render_report(
     color: bool = True,
     res: Result | None = None,
 ) -> str:
+    """Format a human-readable terminal report with bar sub-scores and underlines."""
     _, lines = encode_byte_grid(src)
     result = res or score(src, threshold=thresh)
     bold, dim, yel, cyan, grn, red, rst = _ANSI if color else ("",) * 7
@@ -655,7 +718,7 @@ def render_report(
         f"style: {bold}{result.archetype}{rst} ({style_pct:.0f}%)",
     ]
     for name, val in result.scores.items():
-        filled = int(round(max(0.0, min(1.0, val)) * 16))
+        filled = round(max(0.0, min(1.0, val)) * 16)
         bar = "#" * filled + "." * (16 - filled)
         out.append(f"    {name:15s} {bar} {val:.2f}")
     if not result.squiggles:
@@ -676,8 +739,9 @@ def _walk_dir(root: Path) -> list[Path]:
     found: list[Path] = []
     for cur_dir, subdirs, filenames in os.walk(root):
         subdirs[:] = sorted(
-            name for name in subdirs
-            if not name.startswith(".") and name not in _SKIP_DIRS and not name.endswith(".egg-info")
+            name
+            for name in subdirs
+            if not (name.startswith(".") or name in _SKIP_DIRS or name.endswith(".egg-info"))
         )
         base = Path(cur_dir)
         found.extend(
@@ -698,34 +762,43 @@ def _expand_paths(specs: list[str]) -> list[Path]:
 def _load_update_module() -> Any:
     if __package__:
         from . import update_check
+
         return update_check
     pkg_dir = str(Path(__file__).resolve().parent)
     if pkg_dir not in sys.path:
         sys.path.insert(0, pkg_dir)
     import update_check
+
     return update_check
 
 
-def main(argv: list[str] | None = None) -> int:
-    desc = "A 13 KB, 1.58-bit ternary weight-space programmed System One model for code hygiene."
+def _build_parser() -> argparse.ArgumentParser:
+    desc = "A 23.8 KiB, 1.58-bit ternary weight-space programmed System One model for code hygiene."
     parser = argparse.ArgumentParser(prog="codehygiene", description=desc)
     parser.add_argument("files", nargs="*", help="Files, directories, or globs (stdin if piped)")
     parser.add_argument("-t", "--threshold", type=float, default=0.55, help="Squiggle threshold")
     parser.add_argument("--check", action="store_true", help="Exit 1 when squiggles are found")
     parser.add_argument("--json", action="store_true", help="Output structured JSON")
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
-    parser.add_argument(
-        "--no-update-check", action="store_true", help="Skip 12-hour release check"
-    )
+    parser.add_argument("--no-update-check", action="store_true", help="Skip 12-hour release check")
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
-    args = parser.parse_args(argv)
+    return parser
 
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for `codehygiene`."""
+    parser = _build_parser()
+    args = parser.parse_args(argv)
     if not args.files and sys.stdin.isatty():
         parser.print_help()
         return 0
-    paths = _expand_paths(args.files)
-    targets = [(path.as_posix(), path.read_text("utf-8", "replace")) for path in paths]
-    if not args.files:
+
+    if args.files:
+        targets = [
+            (path.as_posix(), path.read_text("utf-8", "replace"))
+            for path in _expand_paths(args.files)
+        ]
+    else:
         targets = [("<stdin>", sys.stdin.read())]
     if not targets:
         return 0
@@ -737,7 +810,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         payloads = [res.to_dict() for _, _, res in runs]
         is_single = len(payloads) == 1 and (not args.files or not Path(args.files[0]).is_dir())
-        body = payloads[0] if is_single else dict(zip((lbl for lbl, _, _ in runs), payloads))
+        labels = (lbl for lbl, _, _ in runs)
+        body = payloads[0] if is_single else dict(zip(labels, payloads, strict=True))
         print(json.dumps(body, indent=2))
     else:
         reports = [

@@ -42,31 +42,32 @@ Inference is executed in [`codehygiene/__init__.py`](codehygiene/__init__.py) (`
 
 ## Benchmarks
 
-Controlled circuit suites ([`benchmarks/suites.json`](benchmarks/suites.json)), per-issue regression suites ([`benchmarks/issues.json`](benchmarks/issues.json)), 20-language polyglot suites ([`benchmarks/polyglot_eval.json`](benchmarks/polyglot_eval.json)), adversarial RL-gaming probes, JS parity, untuned held-out CPython 3.13 stdlib modules (`25` files, `25,306` lines), and, when present, a held-out sample of the local Go module cache (`352` files, `60,302` lines) are evaluated separately:
+Unified, version-tagged evaluation suites in [`evals/evals.json`](evals/evals.json)—covering controlled 8-kind circuit gates, per-issue regression suites, deduplicated 20-language polyglot traps and structural-friction recall, before/after edit-alignment pairs, adversarial RL-gaming probes, JS parity, untuned held-out CPython 3.13 stdlib modules (`25` files, `25,306` lines), and, when present, a held-out sample of the local Go module cache (`352` files, `60,302` lines)—are evaluated via [`evals/run_evals.py`](evals/run_evals.py):
 
-| Suite / Metric | `v0.4.0` (`12.97 KiB`) | `v0.5.1` (`14.85 KiB`) | `v0.6.0` (`23.84 KiB`) |
+| Suite / Metric | `v0.4.0` (`12.97 KiB`) | `v0.5.1` (`14.85 KiB`) | `v0.6.1` (`23.84 KiB`) |
 | :--- | :---: | :---: | :---: |
-| **Controlled recall** (`suites.json`, in-sample) | `17 / 18` | `18 / 18` (AUROC `1.000`) | **`18 / 18` (AUROC `1.000`)** |
-| **Clean traps & linter-divergent idioms** (`suites.json`) | `8 / 18` FPs | `0 / 18` FPs (mean `0.831`) | **`0 / 18` FPs (mean `0.867`)** |
-| **20-language clean traps** (`polyglot_eval.json`, all / held-out) | — | `8 / 41` · `4 / 17` (`86` FP sq) | **`37 / 41` · `15 / 17` (`10` FP sq)** |
-| **Polyglot & structural-friction recall** (`polyglot_eval.json`) | — | `19 / 30` (friction `0 / 4`) | **`24 / 30` (friction `4 / 4`)** |
-| **[Issue #3](https://github.com/brianbell-x/codehygiene/issues/3) + `v0.6` regression suites** (`issues.json`) | — | `2 / 2` suites | **`5 / 5` suites (`51 / 51` guards)** |
+| **Controlled recall** (`evals.json`, in-sample) | `17 / 18` | `18 / 18` (AUROC `1.000`) | **`18 / 18` (AUROC `1.000`)** |
+| **Clean traps & linter-divergent idioms** (`evals.json`) | `8 / 18` FPs | `0 / 18` FPs (mean `0.831`) | **`0 / 18` FPs (mean `0.867`)** |
+| **20-language clean traps** (`evals.json`, all / held-out) | — | `8 / 39` · `4 / 16` (`86` FP sq) | **`35 / 39` · `14 / 16` (`10` FP sq)** |
+| **196-file 20-language clarity Pearson `r`** (`score` / `rl_reward`) | — | `0.271` / `0.257` | **`0.452` / `0.497`** |
+| **[Issue #3](https://github.com/brianbell-x/codehygiene/issues/3) + `v0.6` regression suites** (`evals.json`) | — | `2 / 2` suites | **`6 / 6` suites (`53 / 53` guards)** |
+| **Anti-gaming & bloat-loophole edit pairs** (`evals.json`) | — | `2 / 4` | **`4 / 4` (max jump `0.000`)** |
 | **Adversarial: `except: pass` vs `except: ...` `rl_reward` gap** | `+0.181` | `0.0000` | **`0.0000`** |
-| **Adversarial: `+40` trivial helpers (`rl_reward` gain)** | `+0.096` (`0.098 -> 0.481`) | `+0.007` (`0.291 -> 0.437`) | **`+0.012` (`0.169 -> 0.280`, `3` sq)** |
+| **Adversarial: `+40` trivial helpers (`rl_reward` gain)** | `+0.096` (`0.098 -> 0.481`) | `+0.007` (`0.291 -> 0.437`) | **`+0.012` (`0.172 -> 0.280`, `3` sq)** |
 | **Adversarial: slop placed past line `2,048`** | `0` sq (`2,048L` cap) | `4` sq (`score` `0.141`) | **`4` sq (`score` `0.134`)** |
-| **Python vs. [`docs/engine.js`](docs/engine.js) max delta** | `< 0.0001` (`<= 2,048L`) | `0.0000` | **`0.0000`** |
+| **Python vs. [`codehygiene/engine.js`](codehygiene/engine.js) max delta** | `< 0.0001` (`<= 2,048L`) | `0.0000` | **`0.0000`** |
 | **Held-out CPython 3.13 stdlib squiggle rate** | `6.09 / 100` lines | `1.90 / 100` lines (`480` sq) | **`1.77 / 100` lines (`447` sq)** |
-| **Held-out CPython 3.13 stdlib median score** (all / `<650` LOC) | `0.093` / `0.24` | `0.391` / `0.588` | **`0.507` / `0.626`** |
-| **Held-out Go module cache squiggle rate** | — | `1.66 / 100` lines (`1,003` sq) | **`1.24 / 100` lines (`745` sq)** |
-| **Warm CPU latency** (`12` / `65` / `333` / `2,649` lines) | `10.2` / `63.6` / `~380` / `3,902 ms` | `~7` / `~35` / `~200` / `~1,500 ms` | **`~7` / `~29` / `~126` / `~1,050 ms`** |
+| **Held-out CPython 3.13 stdlib median score** (all / `<650` LOC) | `0.093` / `0.24` | `0.391` / `0.588` | **`0.370` / `0.459`** |
+| **Held-out Go module cache squiggle rate** | — | `1.66 / 100` lines (`1,003` sq) | **`1.22 / 100` lines (`737` sq)** |
+| **Self-hygiene across all `6` public repo modules** | — | `0` sq | **`0` sq (`0.868` across `6 / 6` files)** |
+| **Warm CPU latency** (`12` / `65` / `333` / `2,649` lines) | `10.2` / `63.6` / `~380` / `3,902 ms` | `~7` / `~35` / `~200` / `~1,500 ms` | **`~6` / `~23` / `~109` / `~975 ms`** |
 
 ## Development
 
 ```bash
 python3 compile.py                              # deterministic weight compilation -> weights.npz
-python3 benchmarks/run_benchmarks.py --check    # controlled, issue, adversarial, JS-parity, stdlib & Go suites
-python3 benchmarks/run_polyglot_eval.py         # 20-language clean-trap, recall & edit-alignment suite
-python3 -m http.server 8123 -d docs             # local Web Worker playground
+python3 evals/run_evals.py --check              # version-sync, controlled, regression, polyglot, anti-gaming, JS-parity & stdlib gates
+python3 evals/run_evals.py --compare a.npz b.npz
 ```
 
 ## References
