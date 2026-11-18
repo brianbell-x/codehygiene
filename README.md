@@ -1,79 +1,126 @@
 # codehygiene
 
-A `23.84 KiB`, `1.58-bit` system one model for code readability.
+An `8.20 KiB`, zero-vocabulary `1.58-bit` ternary model for 2D code geometry and structural readability.
 
 ![codehygiene diff](assets/diff.svg)
 
-`35` `{-1, 0, +1}` tensors (`1,244,706` trits packed at `5` trits/byte + `7,102` 1D channel scales/biases) are deterministically compiled from [`compile.py`](compile.py) into `weights.npz` without training data or gradient descent, and executed in pure NumPy or browser `Float32Array` workers across `20+` languages (`Python`, `TypeScript`, `JavaScript`, `Rust`, `Go`, `C`, `C++`, `C#`, `Java`, `Ruby`, `Swift`, `Kotlin`, `Zig`, `SQL`, `Perl`, `Visual Basic`, `Fortran`, `MATLAB`, `Lua`, and `PHP`).
+`30` zero-vocabulary `{-1, 0, +1}` tensors (`448,498` trits packed at `5` trits/byte + `4,814` 1D channel scales/biases across `42` vectors) are deterministically compiled from [`compile.py`](compile.py) into [`codehygiene/weights.npz`](codehygiene/weights.npz) (`8,400` bytes) without training data, tokenizers, regexes, AST parsers, or English word tables, and executed in pure NumPy or browser `Float32Array` workers across `20+` languages (`Python`, `TypeScript`, `JavaScript`, `Rust`, `Go`, `C`, `C++`, `C#`, `Java`, `Ruby`, `Swift`, `Kotlin`, `Zig`, `SQL`, `Perl`, `Visual Basic`, `Fortran`, `MATLAB`, `Lua`, and `PHP`).
 
-Structural smells missed by syntax/AST linters—pyramid nesting, in-branch loop-cursor mutations, narrator comments, swallowed errors, `*Factory`/`*Manager` ceremony, 2-char variable golf, magic-offset indexing, boolean/out-reference parameter traps, and copy-pasted or alpha-renamed blocks—are flagged while early-return guard clauses, unpadded helpers, string-heavy format lines, and typed math/ODE kernels pass cleanly. Functional bugs, type errors, and security vulnerabilities are out of scope; newly written or modified files are targeted rather than legacy repo sweeps.
+## Zero-Vocabulary `(L × 128)` Byte-Grid Geometry
+
+Every source file is encoded as a full-file `(L × 128)` 7-bit ASCII byte grid with zero line-count truncation. Alphabetic (`a–z`, `A–Z`) and numeric (`0–9`) bytes enter only uniform character-class masks and symmetric cross-line SimHash self-similarity; arbitrary domain identifiers (`_U_CRYPTO_OLD = 62`, `arr_old`, `ent_old`, `*Manager`) carry zero lexical weights anywhere in the model (`Δscore = 0.000000` under identifier renaming and random bijective `[a-zA-Z]` alphabet permutations on pure-geometry circuits).
+
+Six structural squiggle kinds complement syntax formatters (`ruff`, `prettier`, `eslint`, `rustfmt`, `gofmt`, `clang-format`) on newly written or modified diffs:
+
+| Squiggle `kind` | 2D Byte-Grid Trigger | Clean Idioms Passed (`0` Squiggles) |
+| :--- | :--- | :--- |
+| `deep_nesting` | Pyramid control flow (`4+` compound indent steps inside a function/method) | Early-return guard clauses, flat `match`/`switch` arms, class-method baselines |
+| `dense_line` | Chained `.a().b().c()` call trains, nested `? :` ternaries, `;`-packed statements, or wide unwrapped code (`>96–110` cols) | Multiline calls, string-heavy log/SQL lines, single inline expressions |
+| `cramped_layout` | Unbroken `20+` line imperative statement walls or ragged off-grid indentation | Paragraph-paced functions, tabular constant/array literals, aligned signatures |
+| `duplicate_block` | Copy-pasted or alpha-renamed `4+` line imperative stanzas `4–31` lines apart | Distinct domain steps, short struct/field initializers, data tables |
+| `repetitive_structure` | `4+` parallel `if x == lit` equality-comparison branch ladders | Lookup maps, dispatch tables, `2–3` concise branch checks |
+| `comment_echo` | Standalone narrator comments echoing next-line code, `// ...` / `# ...` elisions, or `2+` lines of commented-out code | Multi-line prose/math derivations, Python `>>>` doctests, ASCII dividers, docblocks |
+
+Functional bugs, type errors, and security vulnerabilities are out of scope; newly written or modified diffs are targeted rather than full-repository sweeps.
 
 ## Usage
 
+### CLI & Agent Skill
+
 ```bash
-# Agent skill (Claude Code, Codex, Cursor, Antigravity, Copilot)
+# Install offline agent skill (Claude Code, Codex, Cursor, Antigravity, Copilot)
 npx skills add brianbell-x/codehygiene -g
 npx skills update codehygiene -y
 
-# CLI (paths, globs, directories, or stdin; exits 1 if any squiggle >= threshold)
+# Gate touched files, globs, directories, or stdin (exits 1 if any squiggle >= threshold)
 uvx --from git+https://github.com/brianbell-x/codehygiene codehygiene path/to/changed.py --check
-codehygiene "src/*.rs" -t 0.60 --json --no-update-check
+codehygiene "src/*.rs" -t 0.55 --json --no-update-check
 ```
+
+Clean files print nothing under `--check`. A flagged file prints its flagged lines and a `target:` byte-grid silhouette (`■` = two code bytes, `<-N` = source line) that `_forward` has verified scores cleaner:
+
+```text
+sync.go  0.233/1 -> 0.881/1
+    9!|                             if sink.Send(item.ID, item.Payload) {
+   10!|                                 sent += 1
+  target:
+    3 |   ■■,■■■:=■■■■■■■{
+    4 |     ■■■:■■■  <-4..8
+    5 |     ■■■:■■■■  <-4..8
+    6 |
+    7 |     ■■■■■■(■■■,■■■■■■){  <-9
+    8 |      ■■■=■  <-10
+    9 |   }
+```
+
+### Python & RL Reward Shaping
 
 ```python
 import codehygiene
 
-res = codehygiene.score(code)                                    # Result
-issues = codehygiene.lint(code, threshold=0.55)                  # list[Squiggle]
-reward = codehygiene.rl_reward(code, tests_passed=True, weight=0.15)
+res = codehygiene.score(code)                                        # Result(score, squiggles, line_probs)
+issues = codehygiene.lint(code, threshold=0.55)                      # list[Squiggle]
+target = codehygiene.project_target_grid(code)                       # target_score, target_slice
+reward = codehygiene.rl_reward(code, tests_passed=True, weight=0.15) # test-gated [0, 1] bonus
 ```
 
-- **Output (`Result` / `--json`):** `score` (`[0, 1]`), `rl_hygiene` (`[0, 1]`), `scores` (`flatness`, `naming`, `simplicity`, `comments`, `error_handling`, `layout`), `archetype` / `archetype_probs` (`minimal`, `clean`, `enterprise`, `dense`, `slop`), and `squiggles` (`{line, col_start, col_end, probability, kind, message}` across `deep_nesting`, `poor_naming`, `noisy_comment`, `swallowed_error`, `dense_line`, `special_casing`, `duplicate_block`, `cramped_layout`).
-- **RL reward (`rl_reward`):** Gated multiplicatively on `tests_passed`, pooled over Bayesian-shrunk means (`_PRIOR_LINES = 16`) and span-damped 32-line peak-window densities with docstrings masked, and damped by `1 / (1 + 1.5 * load^0.85)` over telescopic-span, severity-weighted squiggle events (`weight=0.10–0.20` recommended inside test-verified `GRPO`/`PPO` loops).
+- **Diagnostics (`Result` / `--json`):** `score` (`[0, 1]` geometric cleanliness), `line_probs` (`(L, 6)` per-line probabilities), and `squiggles` (`{line, col_start, col_end, probability, kind, message}`); `--json` adds `target_score` and `target_grid` when a cleaner grid is found.
+- **RL reward (`rl_reward`):** Gated multiplicatively on `tests_passed` (`False` always yields `0.0`), pooled over docstring-masked Bayesian means (`_PRIOR_LINES = 16`) and span-damped 32-line peak-window densities, and damped by `1 / (1 + 1.5 * load^0.85)` over telescopic-span, severity-weighted squiggle events (`weight=0.10–0.25` inside test-verified `GRPO`/`PPO` loops).
+
+### Browser & Node.js (`Float32Array` Parity)
+
+```javascript
+import { unpackNpzBuffer, scoreCode, computeRlReward } from "codehygiene/engine.js";
+
+const weights = await unpackNpzBuffer(await (await fetch("/weights.npz")).arrayBuffer());
+const res = scoreCode(sourceText, weights, 0.55); // { score, squiggles, lineProbs }
+const reward = computeRlReward(res, true, 0.15);
+```
 
 ## Architecture
 
-Inference is executed in [`codehygiene/__init__.py`](codehygiene/__init__.py) (`_forward`) via matrix multiplies, 1D convolutions, causal prefix sums, and banded attention—without regexes, tokenizers, or ASTs:
+Inference is executed in [`codehygiene/__init__.py`](codehygiene/__init__.py) (`_forward`) and [`codehygiene/engine.js`](codehygiene/engine.js) (`forwardModel`) strictly via matrix multiplies, 1D convolutions, causal prefix sums, and banded relative-position attention:
 
-1. **Byte Grid (`encode_byte_grid`):** Full-file `(L × 128)` 7-bit ASCII grid without line-count truncation, evaluated over occupied column spans with L3-tiled `im2col` ribbon convolutions.
-2. **Masking (`Blocks 0–1`):** Horizontal 32-quote parity (`"` / `'` / `` ` ``), polyglot comment and raw-string gates (`//`, `# `, `##`, `-- `, `/* */`, `!>`/`!!`/`!`, `%`, `' `, Zig `\\`), string-discounted effective column width (`C2_EFF_LEN`), vertical `"""`/`'''`/`/* */` sawtooth state, 16-line Dyck parenthesis balance, and previous-line comment and `err != nil` taps.
-3. **Local Circuits & Sketches (`Block 1`):** Multi-scale `k=3, 7, 13` ternary convolutions and three 40-dim SimHash sketches (`code`, `comment`, and alpha-invariant operator/branch `skeleton`).
-4. **Banded Sink Attention & Readout (`Blocks 2–3`):** Two `O(L)` relative-position attention passes (`12` and `9` heads over `±32` lines + Bayesian sink priors) feeding per-line squiggle heads and paired-clamp saturating document readouts.
+1. **Block 0 — Column Prefix & Masking:** `tok_emb (128, 52)` + `col_emb (128, 52)` -> `pre_conv3` -> horizontal causal prefix -> `gate1` (`130` channels: 32-quote parity for `"` / `'` / `` ` ``, polyglot comment & Zig `\\` raw-string openers, inline bracket depth) -> `col_fuse` (`68` cell channels evaluated over occupied `row_len + 6` spans with string-discounted `C2_EFF_LEN` effective column width).
+2. **Block 1 — Multi-Scale Line Convolutions, Multiline State & Sketches:** Column pool `col_sum_proj (68, 34)` + L3-tiled `im2col` ribbon convolutions `conv3_w (3, 68, 66)` and `conv7_w (7, 68, 45)` + vertical `"""`/`'''`/`/* */` sawtooth state (`ml_proj`, `ml_gate_w`) + 32-step Dyck parenthesis balance, previous-line comment, and nonblank-gated step-in contour taps (`ml_paren_w`) + three 40-dim L2-normalized SimHash sketches (`code`, `comment`, and alpha-invariant operator `skeleton`) + `lmlp1 (727, 79)` -> `lmlp2 (79, 89)` assembled into `Z` (`L × 209`: `89` geometric registers + `120` SimHash dims).
+3. **Block 2 — Banded Cross-Line Sink Attention:** Two `O(L)` relative-position passes over `±32` lines with Bayesian sink priors (`bsink`): Pass 1 applies `10` content/relative heads (`head_dim = 40`, including exact 40-dim comment/statement cosine on Head 0, 36-column QR code-clone projection on Heads 5–6, and Paley operator-skeleton projection on Heads 7–8) + `cmlp1`; Pass 2 applies `4` relative-offset smoothing heads (`4 × 2 = 8` channels) + `cmlp2`.
+4. **Block 3 — Geometric Readout Heads:** Per-line 6-kind squiggle head (`sq_w`) + docstring-masked Bayesian mean (`_PRIOR_LINES = 16`) and span-damped 32-line peak-window density pooling into paired-clamp saturating `doc1` / `doc2` (`score`).
+
+## Deterministic Compilation
+
+[`compile.py`](compile.py) compiles all `30` ternary matrices and `42` 1D scale/bias vectors directly into [`codehygiene/weights.npz`](codehygiene/weights.npz), enforcing compile-time zero-vocabulary matrix proofs (`verify_zero_vocabulary_invariance`) and built-in geometric boundary checks before writing weights:
+
+```bash
+python3 compile.py
+python3 -m codehygiene codehygiene compile.py --check --no-color --no-update-check
+```
 
 ## Benchmarks
 
-Unified, version-tagged evaluation suites in [`evals/evals.json`](evals/evals.json)—covering controlled 8-kind circuit gates, per-issue regression suites, deduplicated 20-language polyglot traps and structural-friction recall, before/after edit-alignment pairs, adversarial RL-gaming probes, JS parity, untuned held-out CPython 3.13 stdlib modules (`25` files, `25,306` lines), and, when present, a held-out sample of the local Go module cache (`352` files, `60,302` lines)—are evaluated via [`evals/run_evals.py`](evals/run_evals.py):
+Verification separates deterministic offline invariance, polyglot recall/trap, JS parity, and held-out corpus checks (**Tier 1**, `$0.00`) from live external wild-code sanity and refactor-suggestion audits via TypeSafe `Jev` (**Tier 2**, `typesafe/jev-1.14-20261014`: `0 / 44` `"looks crazy"` squiggles across `18` unseen wild/stdlib modules and user repros; `8 / 8` single-file cleanup suggestions judged `genuinely_cleaner`).
 
-| Suite / Metric | `v0.4.0` (`12.97 KiB`) | `v0.5.1` (`14.85 KiB`) | `v0.6.1` (`23.84 KiB`) |
+| Benchmark / Invariance Metric | `v0.5.1` (`14.85 KiB`) | `v0.6.1` (`23.84 KiB`) | `v0.7.0` (`8.20 KiB`) |
 | :--- | :---: | :---: | :---: |
-| **Controlled recall** (`evals.json`, in-sample) | `17 / 18` | `18 / 18` (AUROC `1.000`) | **`18 / 18` (AUROC `1.000`)** |
-| **Clean traps & linter-divergent idioms** (`evals.json`) | `8 / 18` FPs | `0 / 18` FPs (mean `0.831`) | **`0 / 18` FPs (mean `0.867`)** |
-| **20-language clean traps** (`evals.json`, all / held-out) | — | `8 / 39` · `4 / 16` (`86` FP sq) | **`35 / 39` · `14 / 16` (`10` FP sq)** |
-| **196-file 20-language clarity Pearson `r`** (`score` / `rl_reward`) | — | `0.271` / `0.257` | **`0.452` / `0.497`** |
-| **[Issue #3](https://github.com/brianbell-x/codehygiene/issues/3) + `v0.6` regression suites** (`evals.json`) | — | `2 / 2` suites | **`6 / 6` suites (`53 / 53` guards)** |
-| **Anti-gaming & bloat-loophole edit pairs** (`evals.json`) | — | `2 / 4` | **`4 / 4` (max jump `0.000`)** |
-| **Adversarial: `except: pass` vs `except: ...` `rl_reward` gap** | `+0.181` | `0.0000` | **`0.0000`** |
-| **Adversarial: `+40` trivial helpers (`rl_reward` gain)** | `+0.096` (`0.098 -> 0.481`) | `+0.007` (`0.291 -> 0.437`) | **`+0.012` (`0.172 -> 0.280`, `3` sq)** |
-| **Adversarial: slop placed past line `2,048`** | `0` sq (`2,048L` cap) | `4` sq (`score` `0.141`) | **`4` sq (`score` `0.134`)** |
-| **Python vs. [`codehygiene/engine.js`](codehygiene/engine.js) max delta** | `< 0.0001` (`<= 2,048L`) | `0.0000` | **`0.0000`** |
-| **Held-out CPython 3.13 stdlib squiggle rate** | `6.09 / 100` lines | `1.90 / 100` lines (`480` sq) | **`1.77 / 100` lines (`447` sq)** |
-| **Held-out CPython 3.13 stdlib median score** (all / `<650` LOC) | `0.093` / `0.24` | `0.391` / `0.588` | **`0.370` / `0.459`** |
-| **Held-out Go module cache squiggle rate** | — | `1.66 / 100` lines (`1,003` sq) | **`1.22 / 100` lines (`737` sq)** |
-| **Self-hygiene across all `6` public repo modules** | — | `0` sq | **`0` sq (`0.868` across `6 / 6` files)** |
-| **Warm CPU latency** (`12` / `65` / `333` / `2,649` lines) | `10.2` / `63.6` / `~380` / `3,902 ms` | `~7` / `~35` / `~200` / `~1,500 ms` | **`~6` / `~23` / `~109` / `~975 ms`** |
-
-## Development
-
-```bash
-python3 compile.py                              # deterministic weight compilation -> weights.npz
-python3 evals/run_evals.py --check              # version-sync, controlled, regression, polyglot, anti-gaming, JS-parity & stdlib gates
-python3 evals/run_evals.py --compare a.npz b.npz
-```
+| **Ternary archive (`weights.npz`)** | `14.85 KiB` | `23.84 KiB` (`1,244,706` trits) | **`8.20 KiB` (`30` tensors · `448,498` trits)** |
+| **Zero-vocabulary matrix proof & `_old <-> _cur` delta** | No | No (`0.0731`, `5` FPs) | **Verified · `0.000000` (`0` sq)** |
+| **Bijective `[a-zA-Z]` 5-seed spread** (pure geometry) | — | `0.142+` | **`0.000000` (`0` sq)** |
+| **Pre-compile 2D byte-grid boundary blueprint** | — | — | **`36 / 36` pairs (`72 / 72` grids)** |
+| **Controlled recall & clean traps** | `18 / 18` · `0 / 18` FPs | `18 / 18` · `0 / 18` FPs | **`18 / 18` · `0 / 20` FPs (AUROC `1.000`)** |
+| **20-language clean traps** (dev / held-out) | `8 / 39` (`86` FP sq) | `35 / 39` (`10` FP sq) | **`39 / 39` (`23/23` · `16/16`, `0` FPs)** |
+| **Issue & circuit regression suites** | `2 / 2` suites | `6 / 6` suites | **`6 / 6` (`0/70` repro · `0/64` FP · `15/15` guards)** |
+| **Cleanup & anti-hack edit pairs** | — | `4 / 4` anti-bloat | **`8 / 8` cleanup · `5 / 5` anti-hack (`+0.000` jump)** |
+| **Adversarial (`+40` helpers / `+200L` doc / `>2,048L` tail)** | `+0.007` / `4` sq | `+0.012` / `4` sq | **`+0.0155` / `0.070` / `6` tail sq** |
+| **Python vs. [`codehygiene/engine.js`](codehygiene/engine.js) parity** | `0.0000` | `0.0000` | **`0.0000` (`308` files `|Δ| <= 3.88e-6`)** |
+| **Held-out CPython 3.13 stdlib squiggle rate** (`25` files, `25,306L`) | `1.90 / 100` lines | `1.77 / 100` lines (`447` sq) | **`1.24 / 100` lines (`315` sq)** |
+| **Held-out CPython 3.13 stdlib median score** (all / `<650L`) | `0.391` / `0.588` | `0.370` / `0.459` | **`0.708` / `0.750`** |
+| **Held-out Go module cache squiggle rate** (`352` files, `60,302L`) | `1.66 / 100` lines | `1.22 / 100` lines (`737` sq) | **`0.42 / 100` lines (`253` sq)** |
+| **Self-hygiene across all public repo modules** | `0` sq | `0` sq (`0.868`) | **`0` sq (`0.828–0.887` across `6 / 6`)** |
+| **Warm CPU latency** (`12` / `65` / `333` / `2,649` lines) | `~7` / `~35` / `~200` / `~1,500 ms` | `~6` / `~23` / `~109` / `~975 ms` | **`4.2` / `15.8` / `77.8` / `685 ms`** |
 
 ## References
 
 - Rikiya Takehi, Jayden Teoh, Alex Zhang, Omar Khattab — [*Sparks of Weight-Space Programming*](https://rikiyat.github.io/blog/weight-space-programming/), MIT CSAIL (2026) · [code](https://github.com/rikiyat/lm_understand-logs)
 - Chandan Singh et al. — [*Interpretable weight-space programming builds transparent transformers and brain encoding models*](https://www.alphaxiv.org/pdf/2611.interpretable-weight-space-programming) (2026) · [code](https://github.com/csinva/weight-space-programming-autoresearch)
 - Shuming Ma et al. — [*The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits*](https://arxiv.org/abs/2402.17764) (2024)
-- TypeSafe [*System One*](https://docs.typesafe.ai/concepts/system-one.md) and Cloudflare *Clef*
+- TypeSafe [*System One*](https://docs.typesafe.ai/concepts/system-one.md) (`Jev`) and Cloudflare *Clef*
 - Calibration canon: [Redis](https://github.com/redis/redis), [SQLite](https://www.sqlite.org/src), [Lua](https://github.com/lua/lua), [TigerBeetle](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md), [Go stdlib](https://cs.opensource.google/go/go), [Node.js](https://github.com/nodejs/node), [ripgrep](https://github.com/BurntSushi/ripgrep), [OpenBSD](https://github.com/openbsd/src), [LevelDB](https://github.com/google/leveldb), [Starlette](https://github.com/encode/starlette), [Requests](https://github.com/psf/requests), [Hono](https://github.com/honojs/hono), [Svelte](https://github.com/sveltejs/svelte), [HikariCP](https://github.com/brettwooldridge/HikariCP), [.NET Runtime](https://github.com/dotnet/runtime)
