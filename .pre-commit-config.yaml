@@ -1,0 +1,32 @@
+# Dogfood: gate every commit in this repo with this repo's own model.
+# Full AGENTS.md verification gate runs on demand:
+#   prek run --hook-stage manual
+repos:
+  - repo: local
+    hooks:
+      - id: codehygiene
+        name: codehygiene (dogfood, local build)
+        entry: uvx --from . codehygiene --check
+        language: system
+        files: \.(py|pyi|c|h|cc|cpp|cxx|hpp|hh|rs|go|zig|js|jsx|mjs|cjs|ts|tsx|java|cs|lua|rb|swift|kt|kts|sql|pl|pm|vb|f|for|f90|f95|m|php)$
+      - id: compile-weights
+        name: compile.py -> weights.npz (deterministic)
+        entry: python compile.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+      - id: self-hygiene
+        name: codehygiene self-check (public modules)
+        entry: python -m codehygiene codehygiene compile.py evals --check --no-color
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+      - id: evals
+        name: evals/run_evals.py --check (all suites)
+        entry: python evals/run_evals.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]

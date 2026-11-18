@@ -30,7 +30,12 @@ FETCH_TIMEOUT_SEC = 0.6
 JOIN_TIMEOUT_SEC = 0.35
 
 _OPT_OUT_FALSE = frozenset({"", "0", "false", "no", "off"})
-_DISABLE_ENV_VARS = ("CODEHYGIENE_NO_UPDATE_CHECK", "CI", "PYTEST_CURRENT_TEST")
+_DISABLE_ENV_VARS = (
+    "CODEHYGIENE_NO_UPDATE_CHECK",
+    "CI",
+    "PYTEST_CURRENT_TEST",
+    "PRE_COMMIT",
+)
 _PLATFORM_CACHE_ROOTS = {
     "win32": ("LOCALAPPDATA", ("AppData", "Local")),
     "darwin": ("", ("Library", "Caches")),
