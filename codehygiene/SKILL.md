@@ -1,7 +1,7 @@
 ---
 name: codehygiene
 description: >-
-  Offline readability gate (~7-50 ms on small diffs) for touched code in Python, TypeScript, JavaScript, Rust, Go, C, C++, Zig, Java, C#, and Lua. Catches structural smells formatters miss: narrator comments, swallowed errors, deep nesting, `*Factory`/`*Manager` ceremony, cryptic 1-2 char names, magic indices, and duplicated blocks. Use on newly written or modified functions and small diffs rather than full-repository sweeps.
+  Offline readability gate (~7-50 ms on small diffs) for touched code across 20+ languages (Python, TypeScript, JavaScript, Rust, Go, C, C++, C#, Java, Ruby, Swift, Kotlin, Zig, SQL, Perl, Visual Basic, Fortran, MATLAB, Lua, PHP). Catches structural smells formatters miss: narrator comments, swallowed errors, deep nesting and in-branch cursor jumps, `*Factory`/`*Manager` ceremony, cryptic 1-2 char names, magic indices, boolean/out-ref signature traps, and alpha-renamed duplicated blocks. Use on newly written or modified functions and small diffs rather than full-repository sweeps.
 ---
 
 # Code Hygiene
@@ -17,7 +17,7 @@ Passing tests, typecheckers, and formatters (`ruff`, `eslint`, `prettier`, `rust
 
 ## Run It
 
-The pure-NumPy runtime (`__init__.py`, `__main__.py`) and `weights.npz` (`14.5 KiB` `1.58-bit` ternary model) are bundled inside `<SKILL_DIR>` (the directory containing this `SKILL.md`) and run offline across macOS, Linux, and Windows:
+The pure-NumPy runtime (`__init__.py`, `__main__.py`) and `weights.npz` (`23.8 KiB` `1.58-bit` ternary model) are bundled inside `<SKILL_DIR>` (the directory containing this `SKILL.md`) and run offline across macOS, Linux, and Windows:
 
 ```bash
 python3 "<SKILL_DIR>" <touched-files> --check --no-color
@@ -28,7 +28,7 @@ python3 "<SKILL_DIR>" <touched-files> --check --no-color
 - Installed on `PATH`: `codehygiene <touched-files> --check --no-color`
 - Line-level inspection on existing files or piped `stdin`: pass `--json`
 
-Supported extensions (`11` languages): `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.rs`, `.go`, `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.hpp`, `.zig`, `.java`, `.cs`, `.lua`.
+Supported extensions (`20+` languages): `.py`, `.pyi`, `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.rs`, `.go`, `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.hpp`, `.zig`, `.java`, `.cs`, `.rb`, `.swift`, `.kt`, `.kts`, `.scala`, `.sql`, `.pl`, `.pm`, `.vb`, `.f90`, `.f95`, `.f03`, `.f08`, `.m`, `.lua`, `.php`, `.sh`.
 
 ## Workflow
 

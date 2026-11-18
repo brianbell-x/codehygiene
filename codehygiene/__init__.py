@@ -13,7 +13,7 @@ import sys
 from typing import Any
 import numpy as np
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 __all__ = [
     "ARCHETYPE_NAMES", "MAX_COLS", "MAX_REL_DIST", "Result", "SCORE_NAMES",
     "SQUIGGLE_KINDS", "SQUIGGLE_MESSAGES", "Squiggle", "encode_byte_grid",
@@ -24,17 +24,19 @@ __all__ = [
 MAX_COLS = 128
 MAX_REL_DIST = 32
 _SKETCH_DIM = 40
-_PRIOR_LINES = 8.0
+_PRIOR_LINES = 16.0
 _PEAK_WINDOW = 32
 _PEAK_MIN_GATE = 10.0
-_PEAK_PRIOR = 4.0
+_PEAK_PRIOR = 6.0
+_SPAN_CONT_WEIGHT = 0.25
 _RIBBON_GUARD = 6
 _POW3 = 3 ** np.arange(5, dtype=np.uint8)
 
 _CODE_EXTS = frozenset({
     ".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".c", ".h",
     ".cc", ".cpp", ".cxx", ".hpp", ".rs", ".go", ".zig", ".java", ".cs", ".lua",
-    ".rb", ".php", ".swift", ".kt", ".scala", ".sh",
+    ".rb", ".php", ".swift", ".kt", ".kts", ".scala", ".sh", ".sql", ".pl",
+    ".pm", ".vb", ".f90", ".f95", ".f03", ".f08", ".m",
 })
 _SKIP_DIRS = frozenset({
     ".git", ".hg", ".svn", "__pycache__", "node_modules", "target",
@@ -53,6 +55,16 @@ _SPEC = (
 )
 SQUIGGLE_KINDS = tuple(kind for kind, _ in _SPEC)
 SQUIGGLE_MESSAGES = dict(_SPEC)
+_RL_KIND_SEVERITY = {
+    "deep_nesting": 0.42,
+    "poor_naming": 0.06,
+    "noisy_comment": 0.16,
+    "swallowed_error": 0.58,
+    "dense_line": 0.06,
+    "special_casing": 0.34,
+    "duplicate_block": 0.58,
+    "cramped_layout": 0.025,
+}
 
 SCORE_NAMES = (
     "flatness", "naming", "simplicity",
@@ -146,26 +158,40 @@ def _conv1d(cells: np.ndarray, kernel: np.ndarray, bias: np.ndarray) -> np.ndarr
 
 def _ribbon_conv_sum(
     rib_cells: np.ndarray,
+    rib_starts: np.ndarray,
     rib_pos: np.ndarray,
     line_starts: np.ndarray,
+    total_active: int,
     kernel: np.ndarray,
     bias: np.ndarray,
 ) -> np.ndarray:
     k_size, _, out_channels = kernel.shape
     pad = (k_size - 1) // 2
     active_in = np.flatnonzero(np.any(kernel != 0, axis=(0, 2)))
+    n_in = len(active_in)
     sub_cells = np.ascontiguousarray(rib_cells[:, active_in])
-    sub_kern = np.ascontiguousarray(kernel[:, active_in, :])
+    flat_kern = np.ascontiguousarray(kernel[:, active_in, :].reshape(k_size * n_in, out_channels))
 
-    valid_len = len(rib_cells) - (k_size - 1)
-    conv_out = np.empty((valid_len, out_channels), dtype=np.float32)
-    conv_out[:] = bias
-    for offset in range(k_size):
-        k_slice = sub_kern[offset]
-        if k_slice.any():
-            conv_out += sub_cells[offset : offset + valid_len] @ k_slice
-    active_out = np.maximum(conv_out[rib_pos - pad], 0.0)
-    return np.add.reduceat(active_out, line_starts, axis=0)
+    num_nb = len(line_starts)
+    out = np.empty((num_nb, out_channels), dtype=np.float32)
+    chunk_lines = 128
+    for s_ln in range(0, num_nb, chunk_lines):
+        e_ln = min(s_ln + chunk_lines, num_nb)
+        cell_lo = int(line_starts[s_ln])
+        cell_hi = int(line_starts[e_ln]) if e_ln < num_nb else total_active
+        rib_lo = int(rib_starts[s_ln]) - pad
+        rib_hi = int(rib_starts[e_ln]) + pad
+        valid_len = rib_hi - rib_lo - (k_size - 1)
+
+        base_cells = sub_cells[rib_lo:rib_hi]
+        windows = np.lib.stride_tricks.sliding_window_view(base_cells, k_size, axis=0)
+        col_mat = np.ascontiguousarray(windows.transpose(0, 2, 1)).reshape(valid_len, k_size * n_in)
+        conv_out = col_mat @ flat_kern + bias
+        local_pos = rib_pos[cell_lo:cell_hi] - (rib_lo + pad)
+        active_out = np.maximum(conv_out[local_pos], 0.0)
+        local_starts = line_starts[s_ln:e_ln] - cell_lo
+        out[s_ln:e_ln] = np.add.reduceat(active_out, local_starts, axis=0)
+    return out
 
 
 def _block01_active_lines(
@@ -236,16 +262,20 @@ def _block01_active_lines(
     rib_cells[rib_pos] = cells_act
 
     conv3[nonblank] = _ribbon_conv_sum(
-        rib_cells, rib_pos, line_starts, params["conv3_w"], params["conv3_b"]
+        rib_cells, rib_starts, rib_pos, line_starts, total_active,
+        params["conv3_w"], params["conv3_b"],
     )
     conv7[nonblank] = _ribbon_conv_sum(
-        rib_cells, rib_pos, line_starts, params["conv7_w"], params["conv7_b"]
+        rib_cells, rib_starts, rib_pos, line_starts, total_active,
+        params["conv7_w"], params["conv7_b"],
     )
     conv13[nonblank] = _ribbon_conv_sum(
-        rib_cells, rib_pos, line_starts, params["conv13_w"], params["conv13_b"]
+        rib_cells, rib_starts, rib_pos, line_starts, total_active,
+        params["conv13_w"], params["conv13_b"],
     )
     raw_sketch[nonblank] = _ribbon_conv_sum(
-        rib_cells, rib_pos, line_starts, params["sketch_w"], params["sketch_b"]
+        rib_cells, rib_starts, rib_pos, line_starts, total_active,
+        params["sketch_w"], params["sketch_b"],
     )
     return col_sums, conv3, conv7, conv13, raw_sketch
 
@@ -269,6 +299,12 @@ def _attend_banded_heads(
     k_sub = k_proj[banded] if k_proj is not None else None
     v_sub = v_proj[banded]
     rel_sub = b_rel[banded]
+    has_q = (
+        np.any(q_sub != 0, axis=(1, 2))
+        if q_sub is not None
+        else np.zeros((num_b,), dtype=bool)
+    )
+    has_v = np.any(v_sub != 0, axis=(1, 2))
 
     logits = np.full((num_b, num_lines, win + 1), -1e9, dtype=np.float32)
     logits[:, :, win] = b_sink[banded, None]
@@ -279,15 +315,17 @@ def _attend_banded_heads(
         if q_start >= q_end:
             continue
         slot = off + rad
-        bias_col = rel_sub[:, slot : slot + 1]
+        act_mask = rel_sub[:, slot] > -1e3
+        h_act = np.flatnonzero(act_mask)
+        logits[h_act, q_start:q_end, slot] = rel_sub[h_act, slot : slot + 1]
         if q_sub is not None and k_sub is not None:
-            dots = np.sum(
-                q_sub[:, q_start:q_end, :] * k_sub[:, q_start + off : q_end + off, :],
-                axis=-1,
-            )
-            logits[:, q_start:q_end, slot] = dots + bias_col
-        else:
-            logits[:, q_start:q_end, slot] = bias_col
+            h_qk = np.flatnonzero(act_mask & has_q)
+            if len(h_qk):
+                dots = np.sum(
+                    q_sub[h_qk, q_start:q_end, :] * k_sub[h_qk, q_start + off : q_end + off, :],
+                    axis=-1,
+                )
+                logits[h_qk, q_start:q_end, slot] += dots
 
     weights = _softmax(logits)
     out = np.zeros((num_b, num_lines, val_dim), dtype=np.float32)
@@ -296,9 +334,12 @@ def _attend_banded_heads(
         if q_start >= q_end:
             continue
         slot = off + rad
-        out[:, q_start:q_end, :] += (
-            weights[:, q_start:q_end, slot : slot + 1] * v_sub[:, q_start + off : q_end + off, :]
-        )
+        h_val = np.flatnonzero((rel_sub[:, slot] > -1e3) & has_v)
+        if len(h_val):
+            out[h_val, q_start:q_end, :] += (
+                weights[h_val, q_start:q_end, slot : slot + 1]
+                * v_sub[h_val, q_start + off : q_end + off, :]
+            )
     return out
 
 
@@ -372,6 +413,13 @@ def encode_byte_grid(code: str, max_lines: int | None = None) -> tuple[np.ndarra
 def _peak_window_density(state: np.ndarray, active_gate: np.ndarray) -> np.ndarray:
     pos_weighted = _relu(state) * active_gate
     zero_row = np.zeros((1, state.shape[1]), dtype=np.float32)
+    if len(pos_weighted) > 1:
+        prev_span = np.vstack([zero_row, pos_weighted[:-1]])
+        if len(pos_weighted) >= 2:
+            zero_two = np.zeros((2, state.shape[1]), dtype=np.float32)
+            prev_span = np.maximum(prev_span, np.vstack([zero_two, pos_weighted[:-2]]))
+        overlap = np.minimum(pos_weighted, prev_span)
+        pos_weighted = pos_weighted - (1.0 - _SPAN_CONT_WEIGHT) * overlap
     zero_gate = np.zeros((1, 1), dtype=np.float32)
     pad_w = np.vstack([zero_row, np.cumsum(pos_weighted, axis=0)])
     pad_g = np.vstack([zero_gate, np.cumsum(active_gate, axis=0)])
@@ -400,10 +448,11 @@ def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarra
 
     line_hidden = _relu(line_feats @ params["lmlp1_w"] + params["lmlp1_b"])
     line_stats = line_hidden @ params["lmlp2_w"] + params["lmlp2_b"]
-    state = np.concatenate(
-        [line_stats, _l2_norm(sketch[:, :_SKETCH_DIM]), _l2_norm(sketch[:, _SKETCH_DIM:])],
-        axis=-1,
-    )
+    sketch_slices = [
+        _l2_norm(sketch[:, idx : idx + _SKETCH_DIM])
+        for idx in range(0, sketch.shape[1], _SKETCH_DIM)
+    ]
+    state = np.concatenate([line_stats, *sketch_slices], axis=-1)
 
     # Block 2: two cross-line sink-attention + context-MLP passes over [-32..+32] offsets
     for layer in ("1", "2"):
@@ -538,6 +587,42 @@ def lint(code: str, *, threshold: float = 0.55) -> list[Squiggle]:
     return score(code, threshold=threshold).squiggles
 
 
+def _squiggle_event_load(squiggles: list[Squiggle], threshold: float = 0.55) -> float:
+    if not squiggles:
+        return 0.0
+    load = 0.0
+    prev_line: dict[str, int] = {}
+    span_len: dict[str, int] = {}
+    prob_span = max(1e-6, 1.0 - threshold)
+
+    for sq in squiggles:
+        excess = max(0.0, min(1.0, (sq.probability - threshold) / prob_span))
+        conf_weight = 0.35 + 0.65 * excess
+        last_line = prev_line.get(sq.kind, -10)
+        if sq.line - last_line <= 2:
+            cur_span = span_len[sq.kind] + 1
+            span_len[sq.kind] = cur_span
+            span_mult = 0.25 * math.log(cur_span / (cur_span - 1.0))
+        else:
+            span_len[sq.kind] = 1
+            span_mult = 1.0
+        prev_line[sq.kind] = sq.line
+        load += _RL_KIND_SEVERITY.get(sq.kind, 0.25) * conf_weight * span_mult
+    return load
+
+
+def _rl_from_result(
+    res: Result,
+    *,
+    weight: float = 0.25,
+    hygiene_blend: float = 0.5,
+) -> float:
+    blended = (1.0 - hygiene_blend) * res.score + hygiene_blend * res.rl_hygiene
+    load = _squiggle_event_load(res.squiggles)
+    squiggle_damp = 1.0 / (1.0 + 1.5 * (load ** 0.85)) if load > 0.0 else 1.0
+    return 1.0 + weight * blended * squiggle_damp
+
+
 def rl_reward(
     code: str,
     tests_passed: bool | float = True,
@@ -548,10 +633,7 @@ def rl_reward(
     gate = float(tests_passed)
     if gate <= 0.0:
         return 0.0
-    res = score(code)
-    blended = (1.0 - hygiene_blend) * res.score + hygiene_blend * res.rl_hygiene
-    squiggle_damp = 1.0 / (1.0 + 1.5 * len(res.squiggles))
-    return gate * (1.0 + weight * blended * squiggle_damp)
+    return gate * _rl_from_result(score(code), weight=weight, hygiene_blend=hygiene_blend)
 
 
 def render_report(

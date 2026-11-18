@@ -168,7 +168,24 @@ def run_adversarial_probes() -> tuple[dict[str, Any], list[str]]:
             f"probe/after_line_2048: score={tail_res.score:.3f}, tail_squiggles={tail_lines}"
         )
 
-    # 5. Deterministic byte-identical weight compilation
+    # 5. Rewriting `except Exception: pass` as a broad contextlib.suppress must not gain reward
+    send_call = "        mailer.send(order.email, order.id)\n"
+    swallow_code = f"def send_receipt(order):\n    try:\n{send_call}    except Exception:\n        pass\n"
+    suppress_code = f"def send_receipt(order):\n    with contextlib.suppress(Exception):\n{send_call}"
+    narrow_code = "with contextlib.suppress(FileNotFoundError):\n    os.remove(path)\n"
+    rew_swallow = hygiene.rl_reward(swallow_code, tests_passed=True)
+    rew_suppress = hygiene.rl_reward(suppress_code, tests_passed=True)
+    suppress_kinds = {sq.kind for sq in hygiene.lint(suppress_code)}
+    narrow_hits = hygiene.lint(narrow_code)
+    if "swallowed_error" not in suppress_kinds or rew_suppress > rew_swallow + 0.005:
+        failures.append(
+            f"probe/broad_suppress_bypass: except-pass={rew_swallow:.4f} vs "
+            f"suppress(Exception)={rew_suppress:.4f}, kinds={sorted(suppress_kinds)}"
+        )
+    if narrow_hits:
+        failures.append(f"probe/narrow_suppress_clean: {[sq.kind for sq in narrow_hits]}")
+
+    # 6. Deterministic byte-identical weight compilation
     with tempfile.TemporaryDirectory() as tmp_dir:
         rebuilt = Path(tmp_dir) / "weights.npz"
         weight_compiler.compile_weights(rebuilt)
@@ -186,6 +203,8 @@ def run_adversarial_probes() -> tuple[dict[str, Any], list[str]]:
         "padded_200L_docstring_score": round(doc_pad_res.score, 4),
         "after_line_2048_score": round(tail_res.score, 4),
         "after_line_2048_squiggles": len(tail_lines),
+        "broad_suppress_rl_delta": round(rew_suppress - rew_swallow, 4),
+        "narrow_suppress_squiggles": len(narrow_hits),
         "byte_identical_weights": deterministic,
     }
     return summary, failures
@@ -464,6 +483,11 @@ def format_report(payload: dict[str, Any]) -> str:
         f"- Slop past line 2,048: `{adv['after_line_2048_score']:.3f}` "
         f"(`{adv['after_line_2048_squiggles']}` sq)"
     )
+    suppress_line = (
+        f"- `except Exception: pass` -> `contextlib.suppress(Exception)` `rl_reward` delta: "
+        f"`{adv['broad_suppress_rl_delta']:+.4f}` · narrow `suppress(FileNotFoundError)` "
+        f"squiggles: `{adv['narrow_suppress_squiggles']}`"
+    )
 
     lines = [
         "## 1. Controlled Diagnostic & Clean-Trap Suite (`benchmarks/suites.json`, in-sample)",
@@ -476,6 +500,7 @@ def format_report(payload: dict[str, Any]) -> str:
         pad_line,
         f"- Slop + 200-line docstring: `{doc_str}`",
         tail_line,
+        suppress_line,
         f"- Byte-identical `weights.npz`: `{adv['byte_identical_weights']}` · JS parity: `{js_p}`",
         "",
         std_hdr,
@@ -486,8 +511,9 @@ def format_report(payload: dict[str, Any]) -> str:
         "## 4. Issue Regression Suites (`benchmarks/issues.json`)",
     ]
     for issue_id, res in payload["issues"].items():
+        label = f"Issue #{issue_id}" if issue_id.isdigit() else f"`{issue_id}`"
         lines.append(
-            f"- Issue #{issue_id}: reported lines still flagged **{res['reported_still_flagged']}** · "
+            f"- {label}: reported lines still flagged **{res['reported_still_flagged']}** · "
             f"clean-variant FPs **{res['clean_variant_fps']}** · "
             f"recall guards **{res['recall_guards']}**"
         )

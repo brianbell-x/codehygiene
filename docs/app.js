@@ -115,7 +115,7 @@ function escapeHtml(rawText) {
 
 function archiveKbText() {
   if (!state.weights) {
-    return "13.0";
+    return "23.8";
   }
   return (state.weights.stats.archiveBytes / 1024).toFixed(1);
 }

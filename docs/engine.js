@@ -1,10 +1,11 @@
 const MAX_COLS = 128;
 const MAX_REL_DIST = 32;
 const SKETCH_DIM = 40;
-const PRIOR_LINES = 8.0;
+const PRIOR_LINES = 16.0;
 const PEAK_WINDOW = 32;
 const PEAK_MIN_GATE = 10.0;
-const PEAK_PRIOR = 4.0;
+const PEAK_PRIOR = 6.0;
+const SPAN_CONT_WEIGHT = 0.25;
 const Z_IN_DOC = 148;
 
 const HC_ACT = 0;
@@ -46,6 +47,16 @@ const SQUIGGLE_SPEC = [
 
 export const SQUIGGLE_KINDS = SQUIGGLE_SPEC.map((entry) => entry[0]);
 export const SQUIGGLE_MESSAGES = Object.fromEntries(SQUIGGLE_SPEC);
+const RL_KIND_SEVERITY = {
+  deep_nesting: 0.42,
+  poor_naming: 0.06,
+  noisy_comment: 0.16,
+  swallowed_error: 0.58,
+  dense_line: 0.06,
+  special_casing: 0.34,
+  duplicate_block: 0.58,
+  cramped_layout: 0.025,
+};
 
 function findZipEndOffset(bytes, view) {
   const minOffset = Math.max(0, bytes.length - 65557);
@@ -597,21 +608,21 @@ function sumLineCells(sparseCells, numLines, width, numChannels) {
   return sums;
 }
 
-function normalizeSketchSlices(rawSketch, numLines) {
-  const totalSketch = SKETCH_DIM * 2;
+function normalizeSketchSlices(rawSketch, numLines, totalSketch = SKETCH_DIM * 2) {
   const out = new Float32Array(numLines * totalSketch);
   for (let line = 0; line < numLines; line += 1) {
     const base = line * totalSketch;
-    for (let half = 0; half < 2; half += 1) {
-      const sliceStart = base + half * SKETCH_DIM;
+    for (let off = 0; off < totalSketch; off += SKETCH_DIM) {
+      const sliceStart = base + off;
+      const sliceLen = Math.min(SKETCH_DIM, totalSketch - off);
       let normSq = 2.5;
-      for (let idx = 0; idx < SKETCH_DIM; idx += 1) {
+      for (let idx = 0; idx < sliceLen; idx += 1) {
         const clamped = Math.min(1.0, Math.max(0.0, rawSketch[sliceStart + idx]));
         out[sliceStart + idx] = clamped;
         normSq += clamped * clamped;
       }
       const invNorm = 1.0 / Math.sqrt(normSq);
-      for (let idx = 0; idx < SKETCH_DIM; idx += 1) {
+      for (let idx = 0; idx < sliceLen; idx += 1) {
         out[sliceStart + idx] *= invNorm;
       }
     }
@@ -837,6 +848,10 @@ function applyDocstringCellMasks(state, numLines, stateDim, width, lines, cellMa
 function computePeakWindowVectors(state, activeGate, numLines, stateDim, docVec) {
   const prefixW = new Float32Array((numLines + 1) * stateDim);
   const prefixG = new Float32Array(numLines + 1);
+  const prevRow1 = new Float32Array(stateDim);
+  const prevRow2 = new Float32Array(stateDim);
+  const contDrop = 1.0 - SPAN_CONT_WEIGHT;
+
   for (let row = 0; row < numLines; row += 1) {
     const gateVal = activeGate[row];
     prefixG[row + 1] = prefixG[row] + gateVal;
@@ -845,8 +860,13 @@ function computePeakWindowVectors(state, activeGate, numLines, stateDim, docVec)
     const dstBase = (row + 1) * stateDim;
     for (let chan = 0; chan < stateDim; chan += 1) {
       const val = state[srcBase + chan];
-      const posWeighted = val > 0 ? val * gateVal : 0.0;
-      prefixW[dstBase + chan] = prefixW[prevBase + chan] + posWeighted;
+      const rawPos = val > 0 ? val * gateVal : 0.0;
+      const prevMax = prevRow1[chan] > prevRow2[chan] ? prevRow1[chan] : prevRow2[chan];
+      const overlap = rawPos < prevMax ? rawPos : prevMax;
+      const damped = numLines > 1 ? rawPos - contDrop * overlap : rawPos;
+      prefixW[dstBase + chan] = prefixW[prevBase + chan] + damped;
+      prevRow2[chan] = prevRow1[chan];
+      prevRow1[chan] = rawPos;
     }
   }
 
@@ -974,8 +994,9 @@ export function forwardModel(params, grid, lines, numLines, width = MAX_COLS) {
     true,
   );
   const lineStats = linearSparse(lineHidden, numLines, params.lmlp2_w, params.lmlp2_b.data, false);
-  const normSketches = normalizeSketchSlices(rawSketch, numLines);
-  let state = concatLastAxis([lineStats, normSketches], [params.lmlp2_w.cols, SKETCH_DIM * 2], numLines);
+  const totalSketch = params.sketch_w.outChannels;
+  const normSketches = normalizeSketchSlices(rawSketch, numLines, totalSketch);
+  let state = concatLastAxis([lineStats, normSketches], [params.lmlp2_w.cols, totalSketch], numLines);
 
   for (const layer of ["1", "2"]) {
     const attnDelta = sinkAttention(
@@ -1136,14 +1157,44 @@ export function scoreCode(code, weights, threshold = 0.55) {
   return { ...raw, squiggles, elapsedMs };
 }
 
+function computeSquiggleEventLoad(squiggles, threshold = 0.55) {
+  if (!squiggles || squiggles.length === 0) {
+    return 0.0;
+  }
+  let load = 0.0;
+  const prevLine = {};
+  const spanLen = {};
+  const probSpan = Math.max(1e-6, 1.0 - threshold);
+
+  for (let idx = 0; idx < squiggles.length; idx += 1) {
+    const sq = squiggles[idx];
+    const rawExcess = (sq.probability - threshold) / probSpan;
+    const excess = Math.max(0.0, Math.min(1.0, rawExcess));
+    const confWeight = 0.35 + 0.65 * excess;
+    const lastLine = prevLine[sq.kind] ?? -10;
+    let spanMult = 1.0;
+    if (sq.line - lastLine <= 2) {
+      const curSpan = (spanLen[sq.kind] ?? 1) + 1;
+      spanLen[sq.kind] = curSpan;
+      spanMult = 0.25 * Math.log(curSpan / (curSpan - 1.0));
+    } else {
+      spanLen[sq.kind] = 1;
+    }
+    prevLine[sq.kind] = sq.line;
+    const severity = RL_KIND_SEVERITY[sq.kind] ?? 0.25;
+    load += severity * confWeight * spanMult;
+  }
+  return load;
+}
+
 export function computeRlReward(result, testsPassed = true, weight = 0.25, hygieneBlend = 0.5) {
   const gate = Number(testsPassed);
   if (gate <= 0) {
     return 0.0;
   }
   const blended = (1.0 - hygieneBlend) * result.score + hygieneBlend * result.rlHygiene;
-  const sqCount = result.squiggles ? result.squiggles.length : 0;
-  const damp = 1.0 / (1.0 + 1.5 * sqCount);
+  const load = computeSquiggleEventLoad(result.squiggles);
+  const damp = load > 0.0 ? 1.0 / (1.0 + 1.5 * Math.pow(load, 0.85)) : 1.0;
   return gate * (1.0 + weight * blended * damp);
 }
 

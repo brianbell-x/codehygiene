@@ -230,5 +230,730 @@
         "code": "package cache\n\nfunc (c *Cache) Get(key string) (*Entry, error) {\n\traw, err := c.store.Load(key)\n\tif err != nil {\n\t\treturn nil, nil\n\t}\n\treturn decodeEntry(raw)\n}\n"
       }
     ]
+  },
+  "broad-suppress": {
+    "title": "Reward hack: contextlib.suppress(Exception) scored clean while except Exception: pass is flagged",
+    "url": null,
+    "repro": [],
+    "clean_variants": [
+      {
+        "id": "suppress_file_not_found_py",
+        "fp_class": "narrow_suppress",
+        "note": "Narrow suppress around an idempotent delete",
+        "code": "with contextlib.suppress(FileNotFoundError):\n    os.remove(path)\n"
+      },
+      {
+        "id": "suppress_key_error_py",
+        "fp_class": "narrow_suppress",
+        "note": "Bare suppress import, narrow KeyError eviction",
+        "code": "def evict(cache, key):\n    with suppress(KeyError):\n        del cache[key]\n"
+      },
+      {
+        "id": "suppress_import_error_py",
+        "fp_class": "narrow_suppress",
+        "note": "Optional faster dependency",
+        "code": "with contextlib.suppress(ImportError):\n    import ujson as json\n"
+      },
+      {
+        "id": "suppress_tuple_narrow_py",
+        "fp_class": "narrow_suppress",
+        "note": "Tuple of narrow errors around a signal to a process that may be gone",
+        "code": "def stop(proc):\n    with contextlib.suppress(ProcessLookupError, PermissionError):\n        os.kill(proc.pid, signal.SIGTERM)\n"
+      },
+      {
+        "id": "suppress_mention_comment_py",
+        "fp_class": "mention",
+        "note": "suppress(Exception) named in a comment",
+        "code": "def cleanup(path):\n    # never use contextlib.suppress(Exception) here\n    os.remove(path)\n"
+      },
+      {
+        "id": "suppress_mention_string_py",
+        "fp_class": "mention",
+        "note": "suppress(Exception) inside a string literal",
+        "code": "HINT = \"with contextlib.suppress(Exception):\"\n"
+      },
+      {
+        "id": "suppress_mention_docstring_py",
+        "fp_class": "mention",
+        "note": "suppress(Exception) inside a docstring",
+        "code": "def cleanup(path):\n    \"\"\"Remove path.\n\n    Unlike contextlib.suppress(Exception), errors propagate.\n    \"\"\"\n    os.remove(path)\n"
+      },
+      {
+        "id": "custom_exception_class_py",
+        "fp_class": "exception_name",
+        "note": "Exception as a base class",
+        "code": "class ExportError(Exception):\n    pass\n"
+      },
+      {
+        "id": "isinstance_exception_py",
+        "fp_class": "exception_name",
+        "note": "Exception as an isinstance target",
+        "code": "def is_error(value):\n    return isinstance(value, Exception)\n"
+      },
+      {
+        "id": "except_exception_logged_py",
+        "fp_class": "real_handler",
+        "note": "Broad except that logs the failure is a real handler",
+        "code": "def send_receipt(order):\n    try:\n        mailer.send(order.email, order.id)\n    except Exception:\n        log.exception(\"receipt failed for %s\", order.id)\n"
+      },
+      {
+        "id": "suppress_cancelled_error_py",
+        "fp_class": "narrow_suppress",
+        "source": "post_fix",
+        "note": "Awaiting a task after cancelling it",
+        "code": "async def shutdown(task):\n    task.cancel()\n    with contextlib.suppress(asyncio.CancelledError):\n        await task\n"
+      },
+      {
+        "id": "suppress_stop_iteration_py",
+        "fp_class": "narrow_suppress",
+        "source": "post_fix",
+        "note": "Optional first element",
+        "code": "def first_header(rows):\n    header = None\n    with suppress(StopIteration):\n        header = next(rows)\n    return header\n"
+      },
+      {
+        "id": "suppress_oserror_method_py",
+        "fp_class": "narrow_suppress",
+        "source": "post_fix",
+        "note": "Narrow suppress inside a class method",
+        "code": "class TempWorkspace:\n    def close(self):\n        with contextlib.suppress(OSError):\n            shutil.rmtree(self.root)\n        self.root = None\n"
+      }
+    ],
+    "recall_guards": [
+      {
+        "id": "suppress_exception_contextlib_py",
+        "expected_kind": "swallowed_error",
+        "expected_line": 2,
+        "note": "Reviewer case: the Space mock's rewrite of except Exception: pass",
+        "code": "def send_receipt(order):\n    with contextlib.suppress(Exception):\n        mailer.send(order.email, order.id)\n"
+      },
+      {
+        "id": "suppress_exception_bare_import_py",
+        "expected_kind": "swallowed_error",
+        "expected_line": 5,
+        "note": "from contextlib import suppress",
+        "code": "from contextlib import suppress\n\n\ndef send_receipt(order):\n    with suppress(Exception):\n        mailer.send(order.email, order.id)\n"
+      },
+      {
+        "id": "suppress_base_exception_py",
+        "expected_kind": "swallowed_error",
+        "expected_line": 2,
+        "note": "BaseException also swallows KeyboardInterrupt and SystemExit",
+        "code": "def send_receipt(order):\n    with contextlib.suppress(BaseException):\n        mailer.send(order.email, order.id)\n"
+      },
+      {
+        "id": "suppress_exception_tuple_py",
+        "expected_kind": "swallowed_error",
+        "expected_line": 2,
+        "note": "Exception first in a tuple (aiohttp shape)",
+        "code": "def send_receipt(order):\n    with suppress(Exception, KeyboardInterrupt):\n        mailer.send(order.email, order.id)\n"
+      },
+      {
+        "id": "suppress_exception_assigned_py",
+        "expected_kind": "swallowed_error",
+        "expected_line": 2,
+        "note": "Suppressor bound to a name and used later",
+        "code": "def send_receipt(order):\n    quietly = contextlib.suppress(Exception)\n    with quietly:\n        mailer.send(order.email, order.id)\n"
+      },
+      {
+        "id": "suppress_exception_method_py",
+        "expected_kind": "swallowed_error",
+        "expected_line": 3,
+        "source": "post_fix",
+        "note": "Class-indented method",
+        "code": "class Notifier:\n    def notify(self, user):\n        with contextlib.suppress(Exception):\n            self.client.post(user.webhook, json=user.payload())\n"
+      },
+      {
+        "id": "suppress_exception_async_py",
+        "expected_kind": "swallowed_error",
+        "expected_line": 3,
+        "source": "post_fix",
+        "note": "Async close path",
+        "code": "async def close(self):\n    if self._ws is not None:\n        with suppress(Exception):\n            await self._ws.close()\n"
+      },
+      {
+        "id": "except_exception_pass_py",
+        "expected_kind": "swallowed_error",
+        "expected_line": 4,
+        "note": "The original shape must stay flagged",
+        "code": "def send_receipt(order):\n    try:\n        mailer.send(order.email, order.id)\n    except Exception:\n        pass\n"
+      }
+    ]
+  },
+  "v06-block0-lexical": {
+    "title": "Block 0 polyglot comments (!/!>/%/'), Zig \\\\ raw strings, backtick sawtooth, and string-aware column width",
+    "url": null,
+    "repro": [
+      {
+        "id": "fortran_ford_docblock.f90",
+        "reported_lines": [
+          4,
+          5,
+          6,
+          7
+        ],
+        "code": "!> Advance state vector by one RK4 step.\n!>\n!> Stages:\n!>   k1 = deriv(time,          state)\n!>   k2 = deriv(time + half_h, state + half_h * k1)\n!>   k3 = deriv(time + half_h, state + half_h * k2)\n!>   k4 = deriv(time + step_h, state + step_h * k3)\npure subroutine advance_step(time, step_h, state, next_state)\n  ! Compute weighted stage average\n  real(dp), intent(in) :: time, step_h, state(:)\n  real(dp), intent(out) :: next_state(size(state))\n  next_state = state + step_h * state\nend subroutine advance_step\n"
+      },
+      {
+        "id": "zig_multiline_raw_glyphs.zig",
+        "reported_lines": [
+          12,
+          13
+        ],
+        "code": "const glyph_fixture =\n    \\\\# Compact contour fixture in 1000-unit coordinates\n    \\\\glyph A 600\n    \\\\move 50 0\n    \\\\line 300 700\n    \\\\line 550 0\n    \\\\component A 1 0 0 -1 0 700\n    \\\\close\n    \\\\end\n;\n\npub const Config = struct {\n    width: usize = 128,\n    sample: []const u8 = \"AVO\",\n};\n"
+      },
+      {
+        "id": "ruby_postfix_guard_raises.rb",
+        "reported_lines": [
+          2,
+          3,
+          4
+        ],
+        "code": "def validate_move(policy, target, section_id, updated_events, updated_name)\n  raise ArgumentError, 'policy must be reject, ours, or theirs' unless %w[reject ours theirs].include?(policy)\n  raise ArgumentError, 'section cannot be moved beneath itself' if target != section_id && subtree?(target, section_id)\n  raise ArgumentError, \"renumbering collides with event #{updated_name}\" if updated_events.key?(updated_name)\nend\n"
+      },
+      {
+        "id": "swift_guard_throw_strings.swift",
+        "reported_lines": [
+          6,
+          7
+        ],
+        "code": "func verifyScore(_ raw: String, voiceIndex: Int?) throws {\n    let header = \"\"\"\n    {\"format\":\"braille-v1\"}\n    \"\"\"\n    let parsed = try decodeScore(header + raw)\n    guard let voice = voiceIndex else { throw ScoreError.invalid(\"measure appears before voice declaration\") }\n    try expect(parsed.diagnostics.contains(where: { $0.message.contains(\"orphaned\") }), \"missing orphan warning\")\n    _ = voice\n}\n"
+      },
+      {
+        "id": "vb_comments_and_guard_throws.vb",
+        "reported_lines": [
+          6,
+          7,
+          8
+        ],
+        "code": "Public Module TicketReader\n    ' Legacy pipe format accepts each physical layer as one SILO row.\n    Public Sub ValidateRow(parts As String(), gross As Double, tare As Double)\n        Select Case parts(0)\n            Case \"TICKET\"\n                If parts.Length <> 5 Then Throw New ArgumentException(\"TICKET needs id, hatch, gross, and tare fields\")\n                If gross < tare OrElse tare < 0 Then Throw New ArgumentException(\"Invalid ticket gross and tare weights\")\n            Case \"AERATION\"\n                If parts.Length <> 5 Then Throw New ArgumentException(\"AERATION needs temperature, humidity, hours, airflow\")\n        End Select\n    End Sub\nEnd Module\n"
+      },
+      {
+        "id": "js_template_literal_push.js",
+        "reported_lines": [
+          5
+        ],
+        "code": "export function formatSummary(records) {\n  return records.map((record) => {\n    const data = record.result;\n    const rows = [`Header: ${record.line}`];\n    for (const [cell, value] of Object.entries(data.values)) rows.push(`${cell}: ${JSON.stringify(value)}`);\n    for (const warning of data.warnings) rows.push(`WARNING: ${warning}`);\n    return rows.join('\\n');\n  });\n}\n"
+      }
+    ],
+    "clean_variants": [
+      {
+        "id": "matlab_header_and_modulo_m",
+        "fp_class": "matlab_comment",
+        "note": "MATLAB leading % comments masked while mid-line % format strings and comments stay clean",
+        "code": "function out = normalize_weights(weights, label)\n%NORMALIZE_WEIGHTS Scale array weights to unit norm.\n%   Preserves relative phase across all channels.\n    if isempty(weights)\n        error('beam:empty', 'Weights vector must be non-empty.');\n    end\n    % Scale by Euclidean norm when energy is positive.\n    scale = norm(weights);\n    out = weights / max(scale, 1e-12);\n    fprintf('%s: %.4f\\n', label, scale);\nend\n"
+      },
+      {
+        "id": "fortran_inline_doc_and_bang_f90",
+        "fp_class": "fortran_comment",
+        "note": "Fortran !>, !!, !< doc comments and ! line comments with apostrophes",
+        "code": "!> Integrate damped oscillator step.\n!! Uses symplectic Euler update that preserves phase volume.\npure subroutine step_oscillator(pos, vel, dt)\n  real(dp), intent(inout) :: pos !< oscillator displacement\n  real(dp), intent(inout) :: vel !< oscillator velocity\n  real(dp), intent(in) :: dt     !< caller's time step\n\n  ! Update velocity before position for caller's invariant.\n  vel = vel - dt * pos\n  pos = pos + dt * vel\nend subroutine step_oscillator\n"
+      },
+      {
+        "id": "csharp_interpolated_svg_builder_cs",
+        "fp_class": "string_width",
+        "note": "C# interpolated SVG markup string over 115 raw columns with trivial code complexity",
+        "code": "public static class SvgWriter\n{\n    public static void AppendPolygon(StringBuilder output, string color)\n    {\n        output.Append($\"<polygon fill=\\\"{color}\\\" fill-opacity=\\\"0.22\\\" stroke=\\\"{color}\\\" stroke-width=\\\"1\\\"/>\");\n    }\n}\n"
+      },
+      {
+        "id": "php_single_quote_assertions_php",
+        "fp_class": "string_width",
+        "note": "PHP single-quoted associative keys and long assertion description strings",
+        "code": "<?php\nfunction verifyBatch(array $batch, string $worksheet): void {\n    check($batch[1]['result']['evaluations'][0]['eligible'], 'batch continues cleanly with subsequent valid scenario');\n    check(str_contains($worksheet, 'rvc_tv') && str_contains($worksheet, 'rotor'), 'worksheet contains full audit detail');\n}\n"
+      },
+      {
+        "id": "sql_plpgsql_raise_exception_sql",
+        "fp_class": "string_width",
+        "note": "PL/pgSQL single-line IF ... RAISE EXCEPTION guards with descriptive messages",
+        "code": "CREATE FUNCTION check_mass(result numeric) RETURNS numeric LANGUAGE plpgsql AS $$\nBEGIN\n    IF result IS NULL OR result <= 0 THEN RAISE EXCEPTION 'Mass must be finite and strictly positive'; END IF;\n    IF round(result, 6) <> result THEN RAISE EXCEPTION 'Mass exceeds six decimal places in kilograms'; END IF;\n    RETURN result;\nEND;\n$$;\n"
+      },
+      {
+        "id": "rust_inner_attr_and_negation_rs",
+        "fp_class": "bang_safety",
+        "note": "Rust #![allow(...)] inner attribute, ! negation, and != comparison",
+        "code": "#![allow(dead_code)]\n\npub fn validate_header(bytes: &[u8]) -> bool {\n    !bytes.is_empty() && bytes[0] != 0\n}\n"
+      },
+      {
+        "id": "kotlin_nonnull_bang2_clean_kt",
+        "fp_class": "bang_safety",
+        "note": "Kotlin !! non-null assertion and Markdown code fences in comments",
+        "code": "// Example:\n// ```kotlin\n// checkWindow(12.0)\n// ```\nfun checkWindow(maxHours: Double?): Boolean {\n    require(maxHours == null || maxHours!! in 0.001..1000.0) { \"window hours out of bounds\" }\n    return maxHours != null\n}\n"
+      },
+      {
+        "id": "python_codegen_strings_and_go_tags_go",
+        "fp_class": "quote_safety",
+        "note": "Go backtick struct tags with adjacent quotes do not leak backtick parity",
+        "code": "package schema\n\ntype NodeMetric struct {\n\tNodeID       string   `json:\"node_id\"`\n\tOpticalDrop  *float64 `json:\"optical_drop_db,omitempty\"`\n\tSampleCount  int      `json:\"samples\"`\n}\n"
+      }
+    ],
+    "recall_guards": [
+      {
+        "id": "dense_pure_code_chain_ts",
+        "expected_kind": "dense_line",
+        "expected_line": 1,
+        "note": "130+ column chained filter/map/reduce with nested ternary must still fire dense_line",
+        "code": "export const totalScore = (items: Item[], rate: number) => items.filter((it) => it.active && it.qty > 0).map((it) => it.qty * (rate > 0.5 ? 0.5 : rate > 0 ? rate : 1)).reduce((acc, val) => acc + val, 0);\n"
+      },
+      {
+        "id": "dense_packed_oneliner_java",
+        "expected_kind": "dense_line",
+        "expected_line": 3,
+        "note": "125-column packed loop + if + call one-liner with short string must still fire dense_line",
+        "code": "class RouteValidator {\n    void check(Station station, Route route, List<String> faults) {\n        for (String id : route.points.keySet()) if (!station.points.containsKey(id)) faults.add(\"unknown route point \" + id);\n    }\n}\n"
+      },
+      {
+        "id": "boolean_negation_swallowed_js",
+        "expected_kind": "swallowed_error",
+        "expected_line": 2,
+        "note": "!missing boolean negation must not mask fallback swallow on the same line",
+        "code": "export function readOptions(raw) {\n  const parsed = !raw ? null : (raw.items || []);\n  return parsed;\n}\n"
+      },
+      {
+        "id": "double_bang_coercion_ceremony_ts",
+        "expected_kind": "poor_naming",
+        "expected_line": 2,
+        "note": "JS/TS !!flag boolean coercion must not mask ceremony identifiers as a Fortran !! comment",
+        "code": "export function boot(flag: unknown) {\n  const enabled = !!flag && Boolean(new AbstractOrderFactoryManagerImpl());\n  return enabled;\n}\n"
+      },
+      {
+        "id": "kotlin_nonnull_bang2_ceremony_kt",
+        "expected_kind": "poor_naming",
+        "expected_line": 2,
+        "note": "Kotlin token!! followed by space must not mask ceremony identifiers as a Fortran !! comment",
+        "code": "fun createHandler(token: String?): Any {\n    if (token!! in setOf(\"prod\", \"stage\")) return AbstractSessionFactoryManagerImpl()\n    return Unit\n}\n"
+      },
+      {
+        "id": "fortran_step_narration_f90",
+        "expected_kind": "noisy_comment",
+        "expected_line": 3,
+        "note": "Fortran ! line comments route to line-comment channel so Step narration fires noisy_comment",
+        "code": "pure function sum_values(arr) result(total)\n  real, intent(in) :: arr(:)\n  ! Step 1: initialize total accumulator\n  total = sum(arr)\nend function sum_values\n"
+      },
+      {
+        "id": "matlab_todo_narration_m",
+        "expected_kind": "noisy_comment",
+        "expected_line": 2,
+        "note": "MATLAB % line comments route to line-comment channel so TODO noise fires noisy_comment",
+        "code": "function y = scale_vec(x)\n    % TODO: fix this later\n    y = 2 * x;\nend\n"
+      },
+      {
+        "id": "vb_step_narration_vb",
+        "expected_kind": "noisy_comment",
+        "expected_line": 3,
+        "note": "Visual Basic ' line comments route to line-comment channel so Step narration fires noisy_comment",
+        "code": "Public Module MathOps\n    Public Function DoubleVal(val As Integer) As Integer\n        ' Step 1: multiply input value\n        Return val * 2\n    End Function\nEnd Module\n"
+      }
+    ]
+  },
+  "v06-polyglot-circuits": {
+    "title": "Polyglot Block 1 & Block 2 false-positive vetoes and Kotlin/Swift/VB/Lua swallowed-error circuits",
+    "url": null,
+    "repro": [
+      {
+        "id": "cpp_member_xy_angles",
+        "reported_lines": [
+          4,
+          5,
+          6
+        ],
+        "code": "void add_angles(const Mesh &m, std::vector<std::vector<Incident>> &out) {\n    for (size_t i = 0; i < m.edges.size(); ++i) {\n        const Edge &e = m.edges[i];\n        Vec3 a = m.vertices[e.a].rest, b = m.vertices[e.b].rest;\n        out[e.a].push_back({static_cast<int>(i), std::atan2(b.y - a.y, b.x - a.x)});\n        out[e.b].push_back({static_cast<int>(i), std::atan2(a.y - b.y, a.x - b.x)});\n    }\n}\n"
+      },
+      {
+        "id": "cpp_vec3_inline_ops",
+        "reported_lines": [
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "code": "namespace origami {\nstruct Vec3 { double x = 0, y = 0, z = 0; };\ninline Vec3 operator+(Vec3 a, Vec3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }\ninline Vec3 operator-(Vec3 a, Vec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }\ninline double dot(Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }\ninline double length(Vec3 a) { return std::sqrt(dot(a, a)); }\n}\n"
+      },
+      {
+        "id": "zig_receiver_and_bezier_math",
+        "reported_lines": [
+          4,
+          5,
+          7
+        ],
+        "code": "const m = @import(\"model.zig\");\nfn readTransform(r: *Reader) !m.Transform {\n    const t = m.Transform{\n        .xx = try r.float(), .xy = try r.float(), .yx = try r.float(),\n        .yy = try r.float(), .dx = try r.float(), .dy = try r.float(),\n    };\n    if (!m.valid(t.xx) or !m.valid(t.xy) or !m.valid(t.yx)) return error.Invalid;\n    return t;\n}\nfn extrema(minimum: *f64, maximum: *f64, a: f64, b: f64, c: f64) void {\n    const denominator = a - 2 * b + c;\n    if (@abs(denominator) < 1e-12) return;\n}\n"
+      },
+      {
+        "id": "fortran_typed_ode_step",
+        "reported_lines": [
+          1,
+          7,
+          8,
+          9,
+          10
+        ],
+        "code": "pure subroutine rk4_step(f, t, y, dt, y_new)\n  real(dp), intent(in)  :: t, dt, y(:)\n  real(dp), intent(out) :: y_new(size(y))\n  real(dp) :: k1(size(y)), k2(size(y)), k3(size(y)), k4(size(y))\n  real(dp) :: half_dt\n  half_dt = 0.5_dp * dt\n  k1 = f(t,           y)\n  k2 = f(t + half_dt, y + half_dt * k1)\n  k3 = f(t + half_dt, y + half_dt * k2)\n  k4 = f(t + dt,      y + dt      * k3)\n  y_new = y + (dt / 6.0_dp) * (k1 + 2.0_dp * k2 + 2.0_dp * k3 + k4)\nend subroutine rk4_step\n"
+      },
+      {
+        "id": "java_wildcard_generics_map",
+        "reported_lines": [
+          5,
+          6
+        ],
+        "code": "import java.util.Map;\n\nfinal class JsonCheck {\n    static void inspect(Object value) {\n        if (value instanceof Map<?, ?> map) {\n            for (Map.Entry<?, ?> entry : map.entrySet()) {\n                System.out.println(entry.getKey());\n            }\n        }\n    }\n}\n"
+      },
+      {
+        "id": "perl_ruby_regex_non_capturing",
+        "reported_lines": [
+          3,
+          4
+        ],
+        "code": "sub check_pic {\n    my ($clauses, $expanded) = @_;\n    if ($clauses =~ /\\b(?:PIC|PICTURE)\\s+(?:IS\\s+)?(\\S+)/) {\n        return 0 if $expanded !~ /^9+(?:V9+)?$/;\n        return 1;\n    }\n    return 0;\n}\n"
+      },
+      {
+        "id": "lua_optional_table_defaults",
+        "reported_lines": [
+          4,
+          9,
+          10
+        ],
+        "code": "local M = {}\n\nfunction M.new(limit, window, opts)\n  opts = type(opts) == \"table\" and opts or {}\n  return { limit = limit or 100, window = window or 60 }\nend\n\nfunction M.walk(node, swaps, seen)\n  seen = seen or {}\n  for _, swap in ipairs(swaps or {}) do\n    seen[swap] = true\n  end\n  return seen\nend\n\nreturn M\n"
+      },
+      {
+        "id": "py_parenthesized_or_dict_default",
+        "reported_lines": [
+          3
+        ],
+        "code": "def parse_options(options, overrides=None):\n    merged = dict(options)\n    merged.update({k: v for k, v in (overrides or {}).items() if v is not None})\n    return merged\n"
+      },
+      {
+        "id": "perl_arrayref_deref_default",
+        "reported_lines": [
+          6,
+          7
+        ],
+        "code": "package Summary;\nuse strict;\n\nsub collect_nodes {\n    my ($root, $meta) = @_;\n    my @warnings = @{$meta->{warnings} || []};\n    my @children = @{$root->{children} || []};\n    return (\\@warnings, \\@children);\n}\n1;\n"
+      },
+      {
+        "id": "csharp_tryparse_narrow_catch",
+        "reported_lines": [
+          15
+        ],
+        "code": "using System;\nusing System.Text.Json;\n\npublic static class PayloadParser\n{\n    public static bool TryParse(ReadOnlyMemory<byte> utf8, out string? id)\n    {\n        id = null;\n        try\n        {\n            using var doc = JsonDocument.Parse(utf8);\n            id = doc.RootElement.GetProperty(\"id\").GetString();\n            return !string.IsNullOrWhiteSpace(id);\n        }\n        catch (JsonException) { return false; }\n    }\n}\n"
+      },
+      {
+        "id": "js_cli_exitcode_and_impl_guard",
+        "reported_lines": [
+          4,
+          10
+        ],
+        "code": "function resolveOptions(options) {\n  const opts = options && typeof options === \"object\" ? options : {};\n  return {\n    fetchImpl: typeof opts.fetchImpl === \"function\" ? opts.fetchImpl : globalThis.fetch,\n  };\n}\n\ntry {\n  process.exitCode = resolveOptions({}) ? 0 : 1;\n} catch (error) {\n  console.error(`error: ${error.message}`);\n  process.exitCode = 2;\n}\n"
+      },
+      {
+        "id": "ts_vec_math_and_export_type_wall",
+        "reported_lines": [
+          2,
+          12,
+          13,
+          14
+        ],
+        "code": "export type Vec = { x: number; y: number; z: number };\nexport type Formation = { kind: 'formation'; start: number; end: number; from: Record<string, Vec>; to: Record<string, Vec> };\n\nexport type Walk = {\n  kind: 'walk';\n  dancer: string;\n  start: number;\n  end: number;\n  points: Vec[];\n};\n\nexport const add = (a: Vec, b: Vec): Vec => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });\nexport const scale = (a: Vec, k: number): Vec => ({ x: a.x * k, y: a.y * k, z: a.z * k });\nexport const norm = (a: Vec): number => Math.hypot(a.x, a.y, a.z);\n"
+      },
+      {
+        "id": "sql_ddl_create_index_and_trigger",
+        "reported_lines": [
+          8,
+          9
+        ],
+        "code": "CREATE TABLE IF NOT EXISTS credit_issue (\n    issue_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n    registry text NOT NULL,\n    program text NOT NULL,\n    serial_first bigint NOT NULL,\n    serial_last bigint NOT NULL\n);\nCREATE INDEX IF NOT EXISTS credit_issue_registry ON credit_issue (registry, program, serial_first, serial_last);\nCREATE TRIGGER audit_issue AFTER INSERT OR UPDATE OR DELETE ON credit_issue FOR EACH ROW EXECUTE FUNCTION log_mutation();\n"
+      },
+      {
+        "id": "cpp_flat_cli_else_if_ladder",
+        "reported_lines": [
+          9,
+          11,
+          12,
+          13
+        ],
+        "code": "Settings parse_args(int argc, char **argv) {\n    Settings r;\n    for (int i = 1; i < argc; ++i) {\n        std::string a = argv[i];\n        if (a == \"--json\") r.json = true;\n        else if (a == \"--batch\") r.batch = true;\n        else if (a == \"--no-repair\") r.repair = false;\n        else if (a == \"--allow-collisions\") r.collide = true;\n        else if (a == \"--help\") {\n            std::exit(0);\n        } else if (!a.empty() && a[0] == '-') throw std::runtime_error(a);\n        else if (r.input.empty()) r.input = a;\n        else throw std::runtime_error(\"extra input\");\n    }\n    return r;\n}\n"
+      }
+    ],
+    "clean_variants": [
+      {
+        "id": "fortran_percent_member_access_f90",
+        "fp_class": "member_access_math",
+        "note": "Fortran derived-type %x component access and typed intent() ODE step",
+        "code": "subroutine interp_step(profile, x, dx, t, n)\n  type(profile_t), intent(inout) :: profile\n  real(dp), intent(in) :: x, dx, t\n  integer, intent(in) :: n\n  profile%x(n) = x + t * dx\nend subroutine\n"
+      },
+      {
+        "id": "cpp_arrow_and_for_loop_counters",
+        "fp_class": "member_access_math",
+        "note": "Arrow member projections (->x, ->y) and C-style nested loop counters (i, j)",
+        "code": "double sum_edges(const Node *p, const std::array<Vec2, 3> &tri) {\n    double total = p->x + p->y;\n    for (int i = 0; i < 3; ++i) {\n        for (int j = 0; j < 3; ++j) {\n            total += tri[i].x - tri[j].y;\n        }\n    }\n    return total;\n}\n"
+      },
+      {
+        "id": "ruby_frozen_regex_non_capturing_rb",
+        "fp_class": "regex_and_generics",
+        "note": "Ruby regex constant with multiple (?:...) non-capturing groups",
+        "code": "module Treaty\n  SECTION_PATTERN = /\\d+(?:\\.\\d+)*(?:\\([A-Za-z0-9]+\\))*/.freeze\n\n  def self.valid_id?(key)\n    /\\A#{SECTION_PATTERN}\\z/.match?(key)\n  end\nend\n"
+      },
+      {
+        "id": "kotlin_elvis_and_runcatching_onfailure_kt",
+        "fp_class": "kotlin_error_handling",
+        "note": "Kotlin Elvis ?: operator, Result return, and runCatching with .onFailure logging",
+        "code": "fun fetchToken(refresh: (String?) -> String?, current: String?, log: (Throwable) -> Unit): String? {\n    val fresh = runCatching { refresh(current) }\n        .onFailure { log(it) }\n        .getOrNull()\n    return fresh ?: current\n}\n"
+      },
+      {
+        "id": "swift_throwing_and_coalesced_try_swift",
+        "fp_class": "swift_error_handling",
+        "note": "Idiomatic Swift throwing decode and explicit try? ... ?? fallback coalescing",
+        "code": "import Foundation\n\nfunc decodePort(_ raw: Data, defaultPort: Int) -> Int {\n    let parsed = (try? JSONDecoder().decode(Int.self, from: raw)) ?? defaultPort\n    return parsed\n}\n"
+      },
+      {
+        "id": "vb_logged_and_narrow_catch_vb",
+        "fp_class": "vb_error_handling",
+        "note": "Visual Basic Catch logging the error or catching a narrow FormatException",
+        "code": "Public Module SkuParser\n    Public Function ParseCode(raw As String, logger As ILogger) As Integer\n        Try\n            Return Integer.Parse(raw)\n        Catch ex As Exception\n            logger.LogError(ex, \"invalid code\")\n            Throw\n        End Try\n    End Function\nEnd Module\n"
+      },
+      {
+        "id": "lua_pcall_checked_with_stderr_exit_lua",
+        "fp_class": "lua_error_handling",
+        "note": "Lua pcall(main, arg or {}) checking if not ok and reporting to stderr + os.exit",
+        "code": "local function main(arguments)\n    return #arguments\nend\n\nlocal ok, result = pcall(main, arg or {})\nif not ok then\n    io.stderr:write('error: ' .. tostring(result) .. '\\n')\n    os.exit(2)\nend\n"
+      },
+      {
+        "id": "csharp_multiline_tryparse_and_when_filter_cs",
+        "fp_class": "csharp_narrow_catch",
+        "note": "Multiline C# bool TryParse narrow catch and catch ... when (...) exception filter",
+        "code": "using System;\nusing System.Text.Json;\n\npublic static class Parser\n{\n    public static bool TryDecode(ReadOnlyMemory<byte> utf8, out int count)\n    {\n        count = 0;\n        try\n        {\n            using var doc = JsonDocument.Parse(utf8);\n            count = doc.RootElement.GetProperty(\"count\").GetInt32();\n            return true;\n        }\n        catch (JsonException)\n        {\n            return false;\n        }\n    }\n}\n"
+      },
+      {
+        "id": "js_error_recording_catch_and_go_sys_exit",
+        "fp_class": "real_handler",
+        "note": "JS catch recording job.error state before returning false",
+        "code": "export async function deliver(fetchFn, job) {\n  try {\n    const resp = await fetchFn(job.url);\n    return resp.ok;\n  } catch (err) {\n    job.error = err?.name === \"AbortError\" ? \"timeout\" : \"network-error\";\n    return false;\n  }\n}\n"
+      }
+    ],
+    "recall_guards": [
+      {
+        "id": "untyped_single_char_golf_f90",
+        "expected_kind": "poor_naming",
+        "expected_line": 2,
+        "note": "Untyped 5-variable single-letter math golf still fires poor_naming",
+        "code": "subroutine proc(a, b, c, d, e)\n  a = b(c, d) + e\n  c = b(a, e) - d\n  d = b(c, a) * e\n  e = b(d, c) + a\nend subroutine proc\n"
+      },
+      {
+        "id": "typed_single_char_golf_zig",
+        "expected_kind": "poor_naming",
+        "expected_line": 1,
+        "note": "Pure single-letter parameter/local variable golf in a typed Zig fn still fires poor_naming",
+        "code": "fn calc(a: f64, b: f64, c: f64, d: f64) f64 {\n    const x = a + b;\n    const y = c - d;\n    const z = x * y;\n    return z;\n}\n"
+      },
+      {
+        "id": "java_genuine_nested_ternary",
+        "expected_kind": "dense_line",
+        "expected_line": 3,
+        "note": "Genuine nested ? : ternary in Java still fires dense_line",
+        "code": "final class StatusCheck {\n    static String label(boolean a, boolean b, boolean c) {\n        return a ? (b ? \"AB\" : \"A\") : (c ? \"C\" : \"NONE\");\n    }\n}\n"
+      },
+      {
+        "id": "py_return_call_or_empty_dict_swallow",
+        "expected_kind": "swallowed_error",
+        "expected_line": 3,
+        "note": "Python return client.get_json(...) or {} fallback swallow still fires",
+        "code": "def fetch_user_profile(client, user_id):\n    try:\n        return client.get_json(user_id) or {}\n    except Exception:\n        return {}\n"
+      },
+      {
+        "id": "perl_eval_or_empty_arrayref_swallow",
+        "expected_kind": "swallowed_error",
+        "expected_line": 3,
+        "note": "Perl eval { ... } || [] error swallow still fires",
+        "code": "sub load_records {\n    my ($client) = @_;\n    my $rows = eval { $client->fetch_all() } || [];\n    return $rows;\n}\n"
+      },
+      {
+        "id": "csharp_broad_exception_return_false",
+        "expected_kind": "swallowed_error",
+        "expected_line": 13,
+        "note": "Broad catch (Exception) { return false; } in C# still fires swallowed_error",
+        "code": "using System;\nusing System.Text.Json;\n\npublic static class BillingUpdater\n{\n    public static bool ApplyInvoiceUpdate(ReadOnlyMemory<byte> utf8)\n    {\n        try\n        {\n            using var doc = JsonDocument.Parse(utf8);\n            return doc.RootElement.GetProperty(\"paid\").GetBoolean();\n        }\n        catch (Exception) { return false; }\n    }\n}\n"
+      },
+      {
+        "id": "js_stacked_ceremony_factory_impl",
+        "expected_kind": "poor_naming",
+        "expected_line": 1,
+        "note": "Stacked *ManagerServiceFactoryImpl ceremony still fires poor_naming",
+        "code": "class WebhookDeliveryManagerServiceFactoryImpl {\n  createProcessorInstanceImpl() {\n    return new DefaultPayloadHandlerImpl();\n  }\n}\n"
+      },
+      {
+        "id": "cpp_genuine_deep_nesting",
+        "expected_kind": "deep_nesting",
+        "expected_line": 7,
+        "note": "Genuine 5-level nested loops and conditions in C++ still fire deep_nesting",
+        "code": "void process(const Grid &g) {\n    for (int i = 0; i < g.rows; ++i) {\n        if (g.active(i)) {\n            for (int j = 0; j < g.cols; ++j) {\n                if (g.valid(i, j)) {\n                    if (g.cell(i, j) > 0) {\n                        handle(i, j);\n                    }\n                }\n            }\n        }\n    }\n}\n"
+      },
+      {
+        "id": "kotlin_runcatching_getornull_multiline",
+        "expected_kind": "swallowed_error",
+        "expected_line": 5,
+        "note": "Kotlin multiline runCatching { ... }.getOrNull() without .onFailure fires swallowed_error",
+        "code": "fun syncUserProfile(client: ApiClient, userId: String): Profile? {\n    return runCatching {\n        val payload = client.fetchRawProfile(userId)\n        Profile.parse(payload)\n    }.getOrNull()\n}\n"
+      },
+      {
+        "id": "kotlin_runcatching_getordefault_inline",
+        "expected_kind": "swallowed_error",
+        "expected_line": 2,
+        "note": "Kotlin single-line runCatching { ... }.getOrDefault(...) fires swallowed_error",
+        "code": "fun fetchCount(api: Api): Int {\n    return runCatching { api.fetchCount() }.getOrDefault(0)\n}\n"
+      },
+      {
+        "id": "swift_discarded_try_and_guard_try_nil",
+        "expected_kind": "swallowed_error",
+        "expected_line": 2,
+        "note": "Swift discarded _ = try? fires swallowed_error",
+        "code": "func persistToken(_ data: Data, to url: URL) -> Data? {\n    _ = try? data.write(to: url)\n    guard let saved = try? Data(contentsOf: url) else {\n        return nil\n    }\n    return saved\n}\n"
+      },
+      {
+        "id": "swift_guard_let_try_return_nil",
+        "expected_kind": "swallowed_error",
+        "expected_line": 3,
+        "note": "Swift guard let ... = try? ... else { return nil } fires swallowed_error",
+        "code": "func decodeSession(_ raw: Data) -> [String: Any]? {\n    guard let text = String(data: raw, encoding: .utf8) else { return nil }\n    guard let obj = try? JSONSerialization.jsonObject(with: Data(text.utf8)),\n          let dict = obj as? [String: Any] else {\n        return nil\n    }\n    return dict\n}\n"
+      },
+      {
+        "id": "vb_empty_comment_catch_exception",
+        "expected_kind": "swallowed_error",
+        "expected_line": 5,
+        "note": "Visual Basic comment-only Catch ex As Exception ... End Try fires swallowed_error",
+        "code": "Public Module SkuHelper\n    Public Function Normalize(sku As String) As String\n        Try\n            Return sku.Trim().ToUpperInvariant()\n        Catch ex As Exception\n            ' Ignore malformed entries\n        End Try\n        Return String.Empty\n    End Function\nEnd Module\n"
+      },
+      {
+        "id": "vb_catch_exception_return_zero",
+        "expected_kind": "swallowed_error",
+        "expected_line": 5,
+        "note": "Visual Basic Catch ex As Exception returning 0 fires swallowed_error",
+        "code": "Public Module SkuHelper\n    Public Function ParseQty(raw As String) As Integer\n        Try\n            Return Integer.Parse(raw)\n        Catch ex As Exception\n            Return 0\n        End Try\n    End Function\nEnd Module\n"
+      },
+      {
+        "id": "lua_pcall_ok_and_or_zero_swallow",
+        "expected_kind": "swallowed_error",
+        "expected_line": 6,
+        "note": "Lua pcall paired with silent return ok and n or 0 fallback fires swallowed_error",
+        "code": "local M = {}\nfunction M.count(loader, key)\n  local ok, n = pcall(function()\n    return loader(key)\n  end)\n  return ok and n or 0\nend\nreturn M\n"
+      },
+      {
+        "id": "lua_pcall_if_not_ok_return_empty",
+        "expected_kind": "swallowed_error",
+        "expected_line": 3,
+        "note": "Lua pcall followed by if not ok then return {} end fires swallowed_error",
+        "code": "local function load_config(path)\n    local ok, data = pcall(dofile, path)\n    if not ok then return {} end\n    return data\nend\n"
+      }
+    ]
+  },
+  "v06-structural-friction": {
+    "title": "v0.6 Non-slop structural friction: in-branch loop cursor mutation, boolean/out-ref signature threading, and alpha-renamed imperative clones",
+    "url": null,
+    "repro": [],
+    "clean_variants": [
+      {
+        "id": "flat_loop_accumulator_py",
+        "fp_class": "idiomatic_accumulator",
+        "note": "Idiomatic flat loop accumulator and single-guard counter increment",
+        "code": "def summarize_orders(orders):\n    total_cents = 0\n    active_count = 0\n    for order in orders:\n        total_cents += order.cents\n        if order.is_active:\n            active_count += 1\n    return total_cents, active_count\n"
+      },
+      {
+        "id": "csr_for_loop_cursor_pack_js",
+        "fp_class": "idiomatic_accumulator",
+        "note": "Monotonic CSR packing cursor inside a C-style for loop",
+        "code": "export function packActiveRows(rows, mask) {\n  const out = new Float32Array(rows.length);\n  let cursor = 0;\n  for (let idx = 0; idx < rows.length; idx += 1) {\n    if (mask[idx] > 0) {\n      out[cursor] = rows[idx];\n      cursor += 1;\n    }\n  }\n  return out.subarray(0, cursor);\n}\n"
+      },
+      {
+        "id": "binary_search_bounds_go",
+        "fp_class": "idiomatic_accumulator",
+        "note": "Standard binary search updating lo and hi bounds",
+        "code": "package search\n\nfunc LowerBound(keys []int, target int) int {\n\tlo, hi := 0, len(keys)\n\tfor lo < hi {\n\t\tmid := lo + (hi-lo)/2\n\t\tif keys[mid] < target {\n\t\t\tlo = mid + 1\n\t\t} else {\n\t\t\thi = mid\n\t\t}\n\t}\n\treturn lo\n}\n"
+      },
+      {
+        "id": "clean_four_param_helper_rs",
+        "fp_class": "bounded_arity_signature",
+        "note": "Four-parameter helper with &mut buffer and boolean option below 6+ arity threshold",
+        "code": "pub fn write_packet_header(\n    buf: &mut Vec<u8>,\n    channel: u16,\n    compressed: bool,\n    payload_len: u32,\n) {\n    buf.extend_from_slice(&channel.to_be_bytes());\n    buf.push(u8::from(compressed));\n    buf.extend_from_slice(&payload_len.to_be_bytes());\n}\n"
+      },
+      {
+        "id": "python_init_constructor_bools_py",
+        "fp_class": "clean_constructor",
+        "note": "Dataclass/class __init__ constructor initializing configuration fields with boolean defaults",
+        "code": "class ChartStyle:\n    def __init__(\n        self,\n        width: int,\n        height: int,\n        show_grid: bool = True,\n        show_legend: bool = False,\n        clamp_axes: bool = True,\n        dpi: int = 144,\n    ) -> None:\n        self.width = width\n        self.height = height\n        self.show_grid = show_grid\n        self.show_legend = show_legend\n        self.clamp_axes = clamp_axes\n        self.dpi = dpi\n"
+      },
+      {
+        "id": "go_struct_and_new_ctor_go",
+        "fp_class": "clean_constructor",
+        "note": "Go struct and New* constructor with pointer and boolean configuration",
+        "code": "package transport\n\ntype Client struct {\n\tendpoints []string\n\tverifyTLS bool\n\tstrict    bool\n}\n\nfunc NewClient(endpoints []string, verifyTLS bool, strict bool) *Client {\n\treturn &Client{endpoints: endpoints, verifyTLS: verifyTLS, strict: strict}\n}\n"
+      },
+      {
+        "id": "fortran_clamp_helper_no_bool_f90",
+        "fp_class": "extracted_helper_calls",
+        "note": "Extracted 6-parameter Fortran range clamp helper without boolean flags and 3 table-style calls",
+        "code": "subroutine clamp_real(val, lo, hi, fallback, diag, msg)\n  real(dp), intent(inout) :: val\n  real(dp), intent(in) :: lo, hi, fallback\n  type(diagnostics_t), intent(inout) :: diag\n  character(len=*), intent(in) :: msg\n  if (.not. finite(val) .or. val < lo .or. val > hi) then\n    val = fallback\n    call warn(diag, msg)\n  end if\nend subroutine\nsubroutine validate_config(c, diag)\n  type(config_t), intent(inout) :: c\n  type(diagnostics_t), intent(inout) :: diag\n  call clamp_real(c%fit_fraction, 0.05_dp, 0.95_dp, 0.5_dp, diag, 'invalid fit')\n  call clamp_real(c%xmax, 2.0_dp, 100.0_dp, 15.0_dp, diag, 'invalid xmax')\n  call clamp_real(c%omega2_max, 1.0e-9_dp, 500.0_dp, 30.0_dp, diag, 'invalid omega2')\nend subroutine\n"
+      },
+      {
+        "id": "table_driven_test_cases_go",
+        "fp_class": "table_test",
+        "note": "Table-driven Go unit test over declarative struct slice",
+        "code": "package axis_test\n\nimport \"testing\"\n\nfunc TestSanitizeAxisBounds(t *testing.T) {\n\tcases := []struct {\n\t\tname string\n\t\tin   float64\n\t\twant float64\n\t}{\n\t\t{name: \"below\", in: -900.0, want: -500.0},\n\t\t{name: \"inside\", in: 42.5, want: 42.5},\n\t\t{name: \"above\", in: 900.0, want: 500.0},\n\t}\n\tfor _, tc := range cases {\n\t\tif got := SanitizeAxis(tc.in); got != tc.want {\n\t\t\tt.Fatalf(\"%s: got %v, want %v\", tc.name, got, tc.want)\n\t\t}\n\t}\n}\n"
+      }
+    ],
+    "recall_guards": [
+      {
+        "id": "in_branch_cursor_rewind_pl",
+        "expected_kind": "deep_nesting",
+        "expected_line": 7,
+        "note": "In-branch manual cursor jump and rewind inside while loop (Perl)",
+        "code": "sub scan_tokens {\n    my ($buf, $len) = @_;\n    my $cursor = 0;\n    while ($cursor < $len) {\n        my $tag = substr($buf, $cursor, 1);\n        if ($tag eq 'E') {\n            $cursor += 4;\n        } elsif ($tag eq 'R') {\n            $cursor -= 1;\n        } else {\n            $cursor += 1;\n        }\n    }\n}\n"
+      },
+      {
+        "id": "in_branch_arg_cursor_step_f90",
+        "expected_kind": "deep_nesting",
+        "expected_line": 12,
+        "note": "Manual loop-index mutation inside nested select-case arm under do-while (Fortran)",
+        "code": "subroutine parse_cli(argc)\n  integer, intent(in) :: argc\n  integer :: i\n  character(len=64) :: arg\n  i = 1\n  do while (i <= argc)\n    call get_arg(i, arg)\n    select case (trim(arg))\n    case ('--json')\n      call enable_json()\n    case ('--profile')\n      i = i + 1\n      call get_arg(i, arg)\n    end select\n    i = i + 1\n  end do\nend subroutine\n"
+      },
+      {
+        "id": "in_branch_cursor_jump_swift",
+        "expected_kind": "deep_nesting",
+        "expected_line": 7,
+        "note": "In-branch manual index jump and backup inside while scanner (Swift)",
+        "code": "func packCells(_ tokens: [Token]) -> [Int] {\n    var out: [Int] = []\n    var idx = 0\n    while idx < tokens.count {\n        if tokens[idx].isChord {\n            out.append(tokens[idx].code)\n            idx += 2\n        } else if tokens[idx].isBacktrack {\n            idx -= 1\n        } else {\n            idx += 1\n        }\n    }\n    return out\n}\n"
+      },
+      {
+        "id": "flag_and_out_ref_7param_cpp",
+        "expected_kind": "special_casing",
+        "expected_line": 1,
+        "note": "7-parameter C++ procedure threading boolean mode switches and mutable pointer/ref outputs",
+        "code": "bool integrate_mode_step(\n    const Mesh& mesh,\n    double dt,\n    bool clamp_bounds,\n    bool emit_trace,\n    int max_iters,\n    double* out_residual,\n    int& out_steps\n) {\n    *out_residual = mesh.norm() * dt;\n    out_steps = clamp_bounds ? max_iters : 1;\n    return emit_trace || (*out_residual < 1.0);\n}\n"
+      },
+      {
+        "id": "flag_and_hashref_7param_pl",
+        "expected_kind": "special_casing",
+        "expected_line": 1,
+        "note": "7-parameter Perl subroutine threading mutable hash/array refs and $skip/$omit mode flags",
+        "code": "sub decode_group {\n    my ($self, $node, $bytes, $offset, $context, $warnings, $skip) = @_;\n    return ($context, $offset) if $skip;\n    push @{$warnings}, 'empty' if length($bytes) == 0;\n    return ($context, $offset + $node->{len});\n}\n"
+      },
+      {
+        "id": "flag_and_inout_7param_f90",
+        "expected_kind": "special_casing",
+        "expected_line": 1,
+        "note": "7-parameter Fortran subroutine combining logical mode flags with intent(out) status",
+        "code": "subroutine run_pulsation_record(line, line_no, json_mode, batch_mode, prefix, max_steps, failed)\n  character(len=*), intent(in) :: line, prefix\n  integer, intent(in) :: line_no, max_steps\n  logical, intent(in) :: json_mode, batch_mode\n  logical, intent(out) :: failed\n  failed = (len_trim(line) == 0) .and. (.not. batch_mode) .and. json_mode\nend subroutine\n"
+      },
+      {
+        "id": "alpha_renamed_axis_clamp_cs",
+        "expected_kind": "duplicate_block",
+        "expected_line": 12,
+        "note": "Alpha-renamed 6-line NaN/range clamp blocks repeated across xVal, yVal, zVal (C#)",
+        "code": "public static class AxisClamp\n{\n    public static (double, double, double) Sanitize(double xVal, double yVal, double zVal)\n    {\n        if (double.IsNaN(xVal) || double.IsInfinity(xVal))\n        {\n            xVal = 0.0;\n        }\n        else if (xVal < -500.0) { xVal = -500.0; }\n        else if (xVal > 500.0) { xVal = 500.0; }\n\n        if (double.IsNaN(yVal) || double.IsInfinity(yVal))\n        {\n            yVal = 0.0;\n        }\n        else if (yVal < -500.0) { yVal = -500.0; }\n        else if (yVal > 500.0) { yVal = 500.0; }\n\n        if (double.IsNaN(zVal) || double.IsInfinity(zVal))\n        {\n            zVal = 0.0;\n        }\n        else if (zVal < -500.0) { zVal = -500.0; }\n        else if (zVal > 500.0) { zVal = 500.0; }\n        return (xVal, yVal, zVal);\n    }\n}\n"
+      },
+      {
+        "id": "alpha_renamed_field_clamp_f90",
+        "expected_kind": "duplicate_block",
+        "expected_line": 13,
+        "note": "Alpha-renamed Fortran config field range-validation blocks repeated across struct members",
+        "code": "subroutine validate_config(c, diag)\n  type(config_t), intent(inout) :: c\n  type(diagnostics_t), intent(inout) :: diag\n  if (.not. finite(c%fit_fraction) .or. c%fit_fraction <= 0.0_dp .or. c%fit_fraction >= 1.0_dp) then\n    c%fit_fraction = 0.5_dp\n    call warn(diag, 'invalid fitting fraction; default used')\n  end if\n  if (.not. finite(c%xmax) .or. c%xmax < 2.0_dp .or. c%xmax > 200.0_dp) then\n    c%xmax = 15.0_dp\n    call warn(diag, 'invalid radius limit; default used')\n  end if\n  if (.not. finite(c%omega2_max) .or. c%omega2_max <= 0.0_dp .or. c%omega2_max > 500.0_dp) then\n    c%omega2_max = 30.0_dp\n    call warn(diag, 'invalid frequency search bound; default used')\n  end if\nend subroutine\n"
+      }
+    ]
   }
 }
