@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Paste a GitHub link to find hard-to-read code.">
+  <title>codehygiene</title>
+  <link rel="stylesheet" href="styles.css?v=5b713b90b8">
+  <script type="module" src="app.js?v=5b713b90b8"></script>
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true">
+    <symbol id="i-github" viewBox="0 0 16 16"><path fill="currentColor" stroke="none" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></symbol>
+    <symbol id="i-external" viewBox="5 5 14 14"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M3 6.5A2.5 2.5 0 0 1 5.5 4h3.59a2 2 0 0 1 1.41.59L12 6h6.5A2.5 2.5 0 0 1 21 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5Z"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="m9 13 3-3 3 3"/></symbol>
+    <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></symbol>
+    <symbol id="i-focus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-shape" viewBox="0 0 24 24"><path d="M4 5h9"/><path d="M8 10h12"/><path d="M8 15h8"/><path d="M4 20h6"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  </svg>
+  <aside class="banner" id="banner" aria-label="Live stats">
+    <div class="banner-inner">
+      <a class="banner-stats" id="banner-stats" href="leaderboard/#stats" target="_blank" rel="noopener" title="Stats" hidden>
+        <span class="banner-stat" id="banner-scored" hidden><b id="banner-scored-value"></b> files scored</span>
+        <span class="banner-stat" id="banner-issues" hidden><b id="banner-issues-value"></b> issues flagged</span>
+        <span class="banner-stat" id="banner-speed" hidden><b id="banner-speed-value"></b> per file</span>
+      </a>
+      <nav class="banner-links" aria-label="More">
+        <a class="banner-link" href="privacy/" target="_blank" rel="noopener" aria-label="Data retention" title="Data retention">
+          <svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>
+          <span class="banner-link-text">Data Retention</span>
+          <svg class="icon banner-link-arrow" aria-hidden="true"><use href="#i-external"/></svg>
+        </a>
+        <a class="banner-link" id="banner-board" href="leaderboard/" target="_blank" rel="noopener" aria-label="Leaderboard" title="Leaderboard">
+          <svg class="icon" aria-hidden="true"><use href="#i-trophy"/></svg>
+          <span class="banner-link-text">Leaderboard</span>
+          <svg class="icon banner-link-arrow" aria-hidden="true"><use href="#i-external"/></svg>
+        </a>
+      </nav>
+    </div>
+  </aside>
+  <div class="page">
+    <main>
+      <section class="intro">
+        <h1 class="headline">Try <a class="headline-link" href="https://github.com/brianbell-x/codehygiene" target="_blank" rel="noopener" title="CodeHygiene on GitHub">CodeHygiene<svg class="icon headline-arrow" aria-hidden="true"><use href="#i-external"/></svg></a> on your code.</h1>
+
+        <div class="sources">
+          <form class="source" id="source">
+            <label class="sr-only" for="source-input">GitHub link</label>
+            <div class="source-field">
+              <svg class="icon source-icon" aria-hidden="true"><use href="#i-github"/></svg>
+              <input class="source-input" id="source-input" type="text" inputmode="url" placeholder="github.com/owner/repo"
+                autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+              <button class="icon-button is-plain source-submit" type="submit" aria-label="Start" title="Start">
+                <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg>
+              </button>
+            </div>
+          </form>
+          <span class="sources-or">or</span>
+          <button class="ghost source-upload" id="upload" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>
+            Upload folder
+          </button>
+          <input class="sr-only" id="upload-input" type="file" webkitdirectory multiple tabindex="-1" aria-hidden="true" aria-label="Upload folder">
+        </div>
+        <p class="source-progress" id="source-progress" role="status" hidden></p>
+        <p class="source-error" id="source-error" role="alert" hidden></p>
+      </section>
+
+      <section class="run" id="run">
+        <div class="sample" id="sample">
+          <header class="sample-head">
+            <p class="stage-meta">
+              <span class="stage-status" id="sample-status"></span>
+              <span class="stage-score"><span class="stage-score-value" id="sample-value"></span><span class="stage-score-scale">/100</span> <span class="stage-score-word" id="sample-word"></span></span>
+            </p>
+            <span class="stage-path">send_receipt.py</span>
+          </header>
+          <div class="stage-code sample-code" id="sample-code"></div>
+          <button class="sample-run" id="sample-run" type="button" aria-label="Inspect examples" title="Inspect examples"></button>
+        </div>
+
+        <article class="stage" id="stage" hidden>
+          <aside class="explorer" id="explorer" aria-label="Files">
+            <div class="tree-search">
+              <svg class="icon tree-search-icon" aria-hidden="true"><use href="#i-search"/></svg>
+              <label class="sr-only" for="tree-filter">Filter files</label>
+              <input class="tree-filter" id="tree-filter" type="text" placeholder="Filter files" autocomplete="off" spellcheck="false">
+            </div>
+            <nav class="tree-list" id="tree-list" aria-label="File tree"></nav>
+          </aside>
+          <div class="editor">
+            <header class="stage-head">
+              <div class="head-tools">
+                <button class="icon-button is-plain" id="explorer-toggle" type="button" aria-controls="explorer" aria-expanded="true" aria-label="Hide files" title="Hide files">
+                  <svg class="icon" aria-hidden="true"><use href="#i-sidebar"/></svg>
+                </button>
+                <p class="stage-meta">
+                  <span class="stage-status" id="stage-status"></span>
+                  <span class="stage-score" id="stage-score"><span class="stage-score-value"></span><span class="stage-score-scale">/100</span> <span class="stage-score-word"></span></span>
+                  <span class="stage-target" id="stage-target" hidden></span>
+                </p>
+              </div>
+              <div class="nav">
+                <button class="icon-button is-plain nav-step" id="nav-prev" type="button" aria-label="Previous file" title="Previous file">
+                  <svg class="icon nav-prev-icon" aria-hidden="true"><use href="#i-chevron"/></svg>
+                </button>
+                <span class="stage-path" id="stage-path"></span>
+                <button class="icon-button is-plain nav-step" id="nav-next" type="button" aria-label="Next file" title="Next file">
+                  <svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg>
+                </button>
+              </div>
+              <div class="head-actions">
+                <div class="copy-menu">
+                  <button class="icon-button is-plain" id="copy" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="copy-list" aria-label="Copy" title="Copy" hidden>
+                    <svg class="icon" aria-hidden="true"><use id="copy-icon" href="#i-copy"/></svg>
+                  </button>
+                  <div class="menu" id="copy-list" role="menu" aria-label="Copy" hidden>
+                    <button type="button" role="menuitem" data-copy="code">Code</button>
+                    <button type="button" role="menuitem" data-copy="response">Response</button>
+                    <button type="button" role="menuitem" data-copy="instructions">Instructions</button>
+                  </div>
+                </div>
+              </div>
+            </header>
+            <div class="stage-tools">
+              <div class="view-switch" id="view-switch" role="group" aria-label="View">
+                <button type="button" data-view="code" aria-pressed="true">Code</button>
+                <button type="button" data-view="shape" aria-pressed="false">Shape</button>
+                <button type="button" data-view="classes" aria-pressed="false">Classes</button>
+              </div>
+              <div class="tool-actions">
+                <button class="icon-button is-plain tool-toggle" id="spotlight" type="button" aria-pressed="false" aria-label="Spotlight changes" title="Spotlight changes" hidden>
+                  <svg class="icon" aria-hidden="true"><use href="#i-focus"/></svg>
+                </button>
+                <button class="icon-button is-plain tool-toggle" id="compare" type="button" aria-pressed="false" aria-label="Hold to compare" title="Hold to compare" hidden>
+                  <svg class="icon" aria-hidden="true"><use href="#i-eye"/></svg>
+                </button>
+                <button class="icon-button is-plain tool-toggle shape-toggle" id="shape-toggle" type="button" aria-pressed="false" aria-label="Suggestion" title="Suggestion" hidden>
+                  <svg class="icon" aria-hidden="true"><use href="#i-shape"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="stage-code" id="stage-code" role="region" tabindex="0" aria-label="File contents"></div>
+            <div class="readout" id="readout" role="tooltip" hidden></div>
+          </div>
+        </article>
+
+      </section>
+    </main>
+
+    <footer class="foot">
+      <div class="command">
+        <code class="command-text" id="command-text">npx skills add brianbell-x/codehygiene -g</code>
+        <button class="icon-button is-plain" id="command-copy" type="button" aria-label="Copy install command" title="Copy">
+          <svg class="icon" aria-hidden="true"><use id="command-copy-icon" href="#i-copy"/></svg>
+        </button>
+      </div>
+      <p>8.20 KiB neural readability scorer · runs in your browser.</p>
+    </footer>
+  </div>
+</body>
+</html>
