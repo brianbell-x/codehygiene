@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Paste a GitHub link to find hard-to-read code.">
   <title>codehygiene</title>
-  <link rel="stylesheet" href="styles.css?v=87272e735a">
-  <script type="module" src="app.js?v=87272e735a"></script>
+  <link rel="stylesheet" href="styles.css?v=b02e4425ad">
+  <script type="module" src="app.js?v=b02e4425ad"></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true">
@@ -22,13 +22,14 @@
     <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
     <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></symbol>
     <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></symbol>
     <symbol id="i-expand" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
   </svg>
   <aside class="banner" id="banner" aria-label="Live stats">
     <div class="banner-inner">
-      <a class="banner-stats" id="banner-stats" href="leaderboard/#stats" target="_blank" rel="noopener" title="Stats" hidden>
+      <a class="banner-stats" id="banner-stats" href="stats/" target="_blank" rel="noopener" title="Stats" hidden>
         <span class="banner-stat" id="banner-scored" hidden><b id="banner-scored-value"></b> files scored</span>
         <span class="banner-stat" id="banner-issues" hidden><b id="banner-issues-value"></b> issues flagged</span>
         <span class="banner-stat" id="banner-speed" hidden><b id="banner-speed-value"></b> per file</span>
@@ -101,7 +102,7 @@
                 </p>
                 <div class="view-switch" id="view-switch" role="group" aria-label="View">
                   <button type="button" data-view="code" aria-pressed="true">Code</button>
-                  <button type="button" data-view="shape" aria-pressed="false">Shape</button>
+                  <button type="button" data-view="shape" aria-pressed="false">Grid</button>
                 </div>
               </div>
               <div class="nav">
@@ -146,6 +147,11 @@
         <a class="foot-link" href="leaderboard/" target="_blank" rel="noopener">
           <svg class="icon" aria-hidden="true"><use href="#i-trophy"/></svg>
           <span>Leaderboard</span>
+          <svg class="icon foot-link-arrow" aria-hidden="true"><use href="#i-external"/></svg>
+        </a>
+        <a class="foot-link" href="stats/" target="_blank" rel="noopener">
+          <svg class="icon" aria-hidden="true"><use href="#i-chart"/></svg>
+          <span>Stats</span>
           <svg class="icon foot-link-arrow" aria-hidden="true"><use href="#i-external"/></svg>
         </a>
       </nav>

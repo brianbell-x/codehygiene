@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Coding models ranked by code readability, plus live stats.">
+  <meta name="description" content="Open-source codebases and coding models ranked by code readability.">
   <title>Leaderboard · codehygiene</title>
-  <link rel="stylesheet" href="../styles.css?v=87272e735a">
-  <link rel="stylesheet" href="../board.css?v=87272e735a">
-  <script type="module" src="../board.js?v=87272e735a"></script>
+  <link rel="stylesheet" href="../styles.css?v=b02e4425ad">
+  <link rel="stylesheet" href="../board.css?v=b02e4425ad">
+  <script type="module" src="../board.js?v=b02e4425ad"></script>
 </head>
 <body class="board-page">
   <svg class="sprite" aria-hidden="true">
@@ -31,43 +31,23 @@
         <span>CodeHygiene</span>
       </a>
       <nav class="board-tabs" aria-label="Views">
-        <a class="board-tab" id="tab-board" href="#board">Leaderboard</a>
-        <a class="board-tab" id="tab-stats" href="#stats">Stats</a>
+        <a class="board-tab" id="tab-codebases" href="#codebases">Codebases</a>
+        <a class="board-tab" id="tab-models" href="#models">Models</a>
       </nav>
       <p class="board-updated" id="board-updated"></p>
     </header>
 
     <main>
-      <section class="board-view" id="view-board" aria-labelledby="tab-board">
-        <div class="board-table" id="board-table">
-          <ol class="board-list" id="board-list"></ol>
+      <section class="board-view" id="view-codebases" aria-labelledby="tab-codebases">
+        <div class="board-table">
+          <ol class="board-list" id="codebase-list"></ol>
         </div>
       </section>
 
-      <section class="board-view" id="view-stats" aria-labelledby="tab-stats" hidden>
-        <div class="tiles" id="tiles"></div>
-        <div class="charts">
-          <section class="panel">
-            <h2 class="panel-title">Most flagged</h2>
-            <p class="panel-note">Issues found by kind</p>
-            <div class="bars" id="chart-kinds"></div>
-          </section>
-          <section class="panel">
-            <h2 class="panel-title">Cleanest language</h2>
-            <p class="panel-note">Average score, higher is better</p>
-            <div class="bars" id="chart-languages"></div>
-          </section>
+      <section class="board-view" id="view-models" aria-labelledby="tab-models" hidden>
+        <div class="board-table" id="model-table">
+          <ol class="board-list" id="model-list"></ol>
         </div>
-        <section class="panel reward" id="reward" hidden>
-          <header class="reward-head">
-            <h2 class="panel-title">As a reward</h2>
-            <a class="reward-source" id="reward-source" target="_blank" rel="noopener">
-              <span id="reward-version"></span>
-              <svg class="icon" aria-hidden="true"><use href="#i-external"/></svg>
-            </a>
-          </header>
-          <dl class="reward-facts" id="reward-facts"></dl>
-        </section>
       </section>
     </main>
   </div>
