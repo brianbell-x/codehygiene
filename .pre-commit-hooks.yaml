@@ -1,0 +1,15 @@
+# Hook definition for consumers. Add this repo as a pre-commit / prek dependency:
+#
+#   repos:
+#     - repo: git+https://github.com/brianbell-x/codehygiene
+#       rev: v0.6.1
+#       hooks:
+#         - id: codehygiene
+#
+- id: codehygiene
+  name: codehygiene
+  description: "Structural readability squiggles (deep nesting, narrator comments, swallowed errors, variable golf, duplicated blocks) via a 1.58-bit ternary System One model, across 20+ languages."
+  entry: codehygiene --check
+  language: python
+  additional_dependencies: ["numpy>=1.24"]
+  files: \.(py|pyi|c|h|cc|cpp|cxx|hpp|hh|rs|go|zig|js|jsx|mjs|cjs|ts|tsx|java|cs|lua|rb|swift|kt|kts|sql|pl|pm|vb|f|for|f90|f95|m|php)$

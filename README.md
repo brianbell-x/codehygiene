@@ -18,6 +18,10 @@ npx skills update codehygiene -y
 # CLI (paths, globs, directories, or stdin; exits 1 if any squiggle >= threshold)
 uvx --from git+https://github.com/brianbell-x/codehygiene codehygiene path/to/changed.py --check
 codehygiene "src/*.rs" -t 0.60 --json --no-update-check
+
+# prek / pre-commit hook
+prek add git+https://github.com/brianbell-x/codehygiene
+prek install
 ```
 
 ```python
@@ -26,6 +30,16 @@ import codehygiene
 res = codehygiene.score(code)                                    # Result
 issues = codehygiene.lint(code, threshold=0.55)                  # list[Squiggle]
 reward = codehygiene.rl_reward(code, tests_passed=True, weight=0.15)
+```
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: git+https://github.com/brianbell-x/codehygiene
+    rev: v0.6.1
+    hooks:
+      - id: codehygiene
+        # Optional: use -t arg to adjust squiggle confidence cutoff, higher = fewer flags.
 ```
 
 - **Output (`Result` / `--json`):** `score` (`[0, 1]`), `rl_hygiene` (`[0, 1]`), `scores` (`flatness`, `naming`, `simplicity`, `comments`, `error_handling`, `layout`), `archetype` / `archetype_probs` (`minimal`, `clean`, `enterprise`, `dense`, `slop`), and `squiggles` (`{line, col_start, col_end, probability, kind, message}` across `deep_nesting`, `poor_naming`, `noisy_comment`, `swallowed_error`, `dense_line`, `special_casing`, `duplicate_block`, `cramped_layout`).
