@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Paste a GitHub link to find hard-to-read code.">
   <title>codehygiene</title>
-  <link rel="stylesheet" href="styles.css?v=5b713b90b8">
-  <script type="module" src="app.js?v=5b713b90b8"></script>
+  <link rel="stylesheet" href="styles.css?v=3a80e76627">
+  <script type="module" src="app.js?v=3a80e76627"></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true">
@@ -23,8 +23,8 @@
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
     <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></symbol>
     <symbol id="i-focus" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></symbol>
-    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></symbol>
-    <symbol id="i-shape" viewBox="0 0 24 24"><path d="M4 5h9"/><path d="M8 10h12"/><path d="M8 15h8"/><path d="M4 20h6"/></symbol>
+    <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
   </svg>
   <aside class="banner" id="banner" aria-label="Live stats">
@@ -79,14 +79,17 @@
       <section class="run" id="run">
         <div class="sample" id="sample">
           <header class="sample-head">
-            <p class="stage-meta">
+            <p class="stage-meta sample-meta">
               <span class="stage-status" id="sample-status"></span>
               <span class="stage-score"><span class="stage-score-value" id="sample-value"></span><span class="stage-score-scale">/100</span> <span class="stage-score-word" id="sample-word"></span></span>
             </p>
-            <span class="stage-path">send_receipt.py</span>
+            <span class="stage-path sample-path"><span class="path-dir">examples/</span>send_receipt.py</span>
+            <span class="sample-bulb" aria-hidden="true"><svg class="icon"><use href="#i-bulb"/></svg></span>
           </header>
-          <div class="stage-code sample-code" id="sample-code"></div>
-          <button class="sample-run" id="sample-run" type="button" aria-label="Inspect examples" title="Inspect examples"></button>
+          <div class="stage-code sample-code" id="sample-code" aria-hidden="true"></div>
+          <button class="sample-run" id="sample-run" type="button" aria-label="Open examples">
+            <svg class="icon sample-open" aria-hidden="true"><use href="#i-expand"/></svg>
+          </button>
         </div>
 
         <article class="stage" id="stage" hidden>
@@ -107,7 +110,6 @@
                 <p class="stage-meta">
                   <span class="stage-status" id="stage-status"></span>
                   <span class="stage-score" id="stage-score"><span class="stage-score-value"></span><span class="stage-score-scale">/100</span> <span class="stage-score-word"></span></span>
-                  <span class="stage-target" id="stage-target" hidden></span>
                 </p>
               </div>
               <div class="nav">
@@ -120,33 +122,22 @@
                 </button>
               </div>
               <div class="head-actions">
-                <div class="copy-menu">
-                  <button class="icon-button is-plain" id="copy" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="copy-list" aria-label="Copy" title="Copy" hidden>
-                    <svg class="icon" aria-hidden="true"><use id="copy-icon" href="#i-copy"/></svg>
-                  </button>
-                  <div class="menu" id="copy-list" role="menu" aria-label="Copy" hidden>
-                    <button type="button" role="menuitem" data-copy="code">Code</button>
-                    <button type="button" role="menuitem" data-copy="response">Response</button>
-                    <button type="button" role="menuitem" data-copy="instructions">Instructions</button>
-                  </div>
-                </div>
+                <button class="icon-button is-plain" id="copy" type="button" aria-label="Copy for your agent" title="Copy for your agent" hidden>
+                  <svg class="icon" aria-hidden="true"><use id="copy-icon" href="#i-copy"/></svg>
+                </button>
               </div>
             </header>
             <div class="stage-tools">
               <div class="view-switch" id="view-switch" role="group" aria-label="View">
                 <button type="button" data-view="code" aria-pressed="true">Code</button>
                 <button type="button" data-view="shape" aria-pressed="false">Shape</button>
-                <button type="button" data-view="classes" aria-pressed="false">Classes</button>
               </div>
               <div class="tool-actions">
                 <button class="icon-button is-plain tool-toggle" id="spotlight" type="button" aria-pressed="false" aria-label="Spotlight changes" title="Spotlight changes" hidden>
                   <svg class="icon" aria-hidden="true"><use href="#i-focus"/></svg>
                 </button>
-                <button class="icon-button is-plain tool-toggle" id="compare" type="button" aria-pressed="false" aria-label="Hold to compare" title="Hold to compare" hidden>
-                  <svg class="icon" aria-hidden="true"><use href="#i-eye"/></svg>
-                </button>
-                <button class="icon-button is-plain tool-toggle shape-toggle" id="shape-toggle" type="button" aria-pressed="false" aria-label="Suggestion" title="Suggestion" hidden>
-                  <svg class="icon" aria-hidden="true"><use href="#i-shape"/></svg>
+                <button class="icon-button is-plain tool-toggle suggest-toggle" id="suggest-toggle" type="button" aria-pressed="false" aria-label="Show suggestions" title="Show suggestions" hidden>
+                  <svg class="icon" aria-hidden="true"><use href="#i-bulb"/></svg>
                 </button>
               </div>
             </div>
