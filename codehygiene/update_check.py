@@ -1,4 +1,4 @@
-"""codehygiene v0.6.1 — Periodic 12-hour release check against pyproject.toml metadata."""
+"""codehygiene v0.7.0 — Periodic 12-hour release check against pyproject.toml metadata."""
 
 from __future__ import annotations
 
@@ -61,7 +61,8 @@ def extract_project_version(toml_text: str) -> str:
 
 def parse_version_tuple(raw_ver: str) -> tuple[int, ...]:
     """Parse `vX.Y.Z` into an integer tuple, or `()` when malformed."""
-    tokens = raw_ver.strip().lstrip("v").split("-", 1)[0].split(".")
+    clean_ver = raw_ver.strip().lstrip("v").split("-", 1)[0]
+    tokens = clean_ver.split(".")
     if not all(tok.isdigit() for tok in tokens):
         return ()
     return tuple(int(tok) for tok in tokens)

@@ -1,4 +1,4 @@
-"""codehygiene v0.6.1 — PEP 338 CLI entry point (`python -m codehygiene`)."""
+"""codehygiene v0.7.0 — PEP 338 CLI entry point (`python -m codehygiene`)."""
 
 import sys
 from pathlib import Path

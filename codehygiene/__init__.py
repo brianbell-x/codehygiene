@@ -1,8 +1,9 @@
-"""codehygiene v0.6.1 — 1.58-bit ternary System One model for code readability and hygiene."""
+"""codehygiene v0.7.0 — Zero-vocabulary 1.58-bit ternary model for code geometry and structure."""
 
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import math
 import os
@@ -14,12 +15,10 @@ from typing import Any
 
 import numpy as np
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 __all__ = [
-    "ARCHETYPE_NAMES",
     "MAX_COLS",
     "MAX_REL_DIST",
-    "SCORE_NAMES",
     "SQUIGGLE_KINDS",
     "SQUIGGLE_MESSAGES",
     "Result",
@@ -28,6 +27,7 @@ __all__ = [
     "lint",
     "load_weights",
     "main",
+    "project_target_grid",
     "render_report",
     "rl_reward",
     "score",
@@ -57,37 +57,26 @@ _SKIP_DIRS = frozenset({
 })
 
 _SPEC = (
-    ("deep_nesting", "Deep nesting; flatten with guard clauses"),
-    ("poor_naming", "Over-abstracted (*Factory), cryptic short name, or magic index"),
-    ("noisy_comment", "Comment restates code or leaves TODO/lint noise"),
-    ("swallowed_error", "Ignored error or silent fallback value"),
-    ("dense_line", "Long line, chained calls, or nested ternary"),
-    ("special_casing", "Stacked hardcoded special-case branches"),
-    ("duplicate_block", "Duplicated logic block"),
-    ("cramped_layout", "Unbroken statement wall or inconsistent indent"),
+    ("deep_nesting", "Deep nesting pyramid; flatten with guard clauses or helpers"),
+    ("dense_line", "Wide line, packed statements, call train, or nested ternary"),
+    ("cramped_layout", "Unbroken statement wall or ragged off-grid indentation"),
+    ("duplicate_block", "Duplicated or structurally cloned multi-line block"),
+    ("repetitive_structure", "Repetitive parallel equality or branch ladder"),
+    ("comment_echo", "Comment echoes adjacent code or leaves commented-out code"),
 )
 SQUIGGLE_KINDS = tuple(kind for kind, _ in _SPEC)
 SQUIGGLE_MESSAGES = dict(_SPEC)
 _RL_KIND_SEVERITY = {
     "deep_nesting": 0.42,
-    "poor_naming": 0.06,
-    "noisy_comment": 0.16,
-    "swallowed_error": 0.58,
-    "dense_line": 0.06,
-    "special_casing": 0.34,
+    "dense_line": 0.10,
+    "cramped_layout": 0.08,
     "duplicate_block": 0.58,
-    "cramped_layout": 0.025,
+    "repetitive_structure": 0.34,
+    "comment_echo": 0.18,
 }
 
-SCORE_NAMES = ("flatness", "naming", "simplicity", "comments", "error_handling", "layout")
-ARCHETYPE_NAMES = ("minimal", "clean", "enterprise", "dense", "slop")
-_N_SCORES = len(SCORE_NAMES)
-_SCORE_LOGIT_END = 2 + 4 * _N_SCORES
-_STYLE_LOGIT_END = _SCORE_LOGIT_END + len(ARCHETYPE_NAMES)
-_CONV_BANKS = ("conv3", "conv7", "conv13", "sketch")
-
-_LEVELS = np.array([0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0], dtype=np.float32)
-_ANSI = ("\033[1m", "\033[2m", "\033[33m", "\033[36m", "\033[32m", "\033[31m", "\033[0m")
+_CONV_BANKS = ("conv3", "conv7", "sketch")
+_ANSI = ("\033[1m", "\033[2m", "\033[33m", "\033[32m", "\033[31m", "\033[0m")
 
 
 @dataclass
@@ -103,10 +92,6 @@ class Squiggle:
 @dataclass
 class Result:
     score: float
-    rl_hygiene: float
-    scores: dict[str, float]
-    archetype: str
-    archetype_probs: dict[str, float]
     squiggles: list[Squiggle]
     line_probs: np.ndarray
 
@@ -115,16 +100,7 @@ class Result:
             {**asdict(sq), "probability": round(sq.probability, 4)}
             for sq in self.squiggles
         ]
-        return {
-            "score": round(self.score, 4),
-            "rl_hygiene": round(self.rl_hygiene, 4),
-            "scores": {name: round(val, 4) for name, val in self.scores.items()},
-            "archetype": self.archetype,
-            "archetype_probs": {
-                name: round(val, 4) for name, val in self.archetype_probs.items()
-            },
-            "squiggles": items,
-        }
+        return {"score": round(self.score, 4), "squiggles": items}
 
 
 @dataclass(frozen=True)
@@ -150,28 +126,29 @@ def _softmax(arr: np.ndarray) -> np.ndarray:
     return shifted / np.sum(shifted, axis=-1, keepdims=True)
 
 
-def _l2_norm(arr: np.ndarray, eps: float = 2.5) -> np.ndarray:
-    return arr / np.sqrt(np.sum(arr * arr, axis=-1, keepdims=True) + eps)
+def _l2_norm(arr: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    norms = np.sqrt(np.sum(arr * arr, axis=-1, keepdims=True) + eps)
+    return arr / norms
 
 
-def _conv1d(cells: np.ndarray, kernel: np.ndarray, bias: np.ndarray) -> np.ndarray:
-    num_lines, num_cols, _ = cells.shape
-    k_size, _, out_channels = kernel.shape
+def _conv1d_grid(grid_x: np.ndarray, kernel: np.ndarray, bias: np.ndarray) -> np.ndarray:
+    """Apply symmetric 1D convolution `(k, in_ch, out_ch)` along the column axis."""
+    num_lines, num_cols, _ = grid_x.shape
     active_in = np.flatnonzero(np.any(kernel != 0, axis=(0, 2)))
     if len(active_in) == 0:
-        return np.broadcast_to(bias, (num_lines, num_cols, out_channels)).copy()
+        return np.broadcast_to(bias, (num_lines, num_cols, kernel.shape[2])).copy()
 
-    sub_cells = cells[:, :, active_in]
-    sub_kern = np.ascontiguousarray(kernel[:, active_in, :])
+    k_size, _, out_channels = kernel.shape
     pad = (k_size - 1) // 2
-    pad_widths = ((0, 0), (pad, k_size - 1 - pad), (0, 0))
-    padded = np.pad(sub_cells, pad_widths) if k_size > 1 else sub_cells
-
-    stride_cols = num_cols + k_size - 1
-    flat_in = padded.reshape(-1, len(active_in))
+    sub_x = grid_x[:, :, active_in]
+    sub_kern = np.ascontiguousarray(kernel[:, active_in, :])
+    padded = np.pad(sub_x, ((0, 0), (pad, pad), (0, 0)))
+    stride_cols = num_cols + 2 * pad
+    flat_in = padded.reshape(num_lines * stride_cols, len(active_in))
     span = num_lines * stride_cols - (k_size - 1)
+
     flat_out = np.empty((num_lines * stride_cols, out_channels), dtype=np.float32)
-    flat_out[:span] = bias
+    flat_out[:] = bias
     for offset in range(k_size):
         k_slice = sub_kern[offset]
         if k_slice.any():
@@ -187,18 +164,20 @@ def _ribbon_conv_sum(
     kernel: np.ndarray,
     bias: np.ndarray,
 ) -> np.ndarray:
-    k_size, _, out_channels = kernel.shape
-    pad = (k_size - 1) // 2
     active_in = np.flatnonzero(np.any(kernel != 0, axis=(0, 2)))
-    n_in = len(active_in)
+    if len(active_in) == 0:
+        return np.zeros((len(spans.line_starts), kernel.shape[2]), dtype=np.float32)
+
+    k_size, n_in, out_channels = kernel.shape[0], len(active_in), kernel.shape[2]
+    pad = (k_size - 1) // 2
     sub_cells = np.ascontiguousarray(rib_cells[:, active_in])
     flat_kern = np.ascontiguousarray(
         kernel[:, active_in, :].reshape(k_size * n_in, out_channels)
     )
-
     line_starts = spans.line_starts
     num_nb = len(line_starts)
     out = np.empty((num_nb, out_channels), dtype=np.float32)
+
     for s_ln in range(0, num_nb, 128):
         e_ln = min(s_ln + 128, num_nb)
         cell_lo = int(line_starts[s_ln])
@@ -240,18 +219,36 @@ def _extract_active_spans(grid: np.ndarray) -> _ActiveSpans | None:
     )
 
 
+def _scatter_ribbon(
+    cells: np.ndarray,
+    spans: _ActiveSpans,
+    guard: int,
+    fill: np.ndarray | float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    starts = np.empty(len(spans.nonblank) + 1, dtype=np.int32)
+    starts[0] = guard
+    np.cumsum(spans.span_lens + guard, out=starts[1:])
+
+    pos = starts[:-1][spans.line_ids] + spans.within_col
+    ribbon = np.empty((int(starts[-1]) + guard, cells.shape[1]), dtype=np.float32)
+    ribbon[:] = fill
+    ribbon[pos] = cells
+    return ribbon, starts, pos
+
+
+def _line_cumsum(vals: np.ndarray, starts: np.ndarray, ids: np.ndarray) -> np.ndarray:
+    csum = np.cumsum(vals, axis=0)
+    prior = csum[np.maximum(starts - 1, 0)]
+    base = np.where((starts > 0)[:, None], prior, 0.0)
+    return csum - base[ids]
+
+
 def _fuse_block0_cells(
     params: dict[str, np.ndarray], grid: np.ndarray, spans: _ActiveSpans
 ) -> np.ndarray:
     codes = grid[spans.nonblank[spans.line_ids], spans.within_col]
     emb_act = params["tok_emb"][codes] + params["col_emb"][spans.within_col]
-
-    pre_starts = np.empty(len(spans.nonblank) + 1, dtype=np.int32)
-    pre_starts[0] = 1
-    np.cumsum(spans.span_lens + 1, out=pre_starts[1:])
-    pre_pos = pre_starts[:-1][spans.line_ids] + spans.within_col
-    rib_emb = np.zeros((int(pre_starts[-1]) + 1, emb_act.shape[1]), dtype=np.float32)
-    rib_emb[pre_pos] = emb_act
+    rib_emb, _, pre_pos = _scatter_ribbon(emb_act, spans, guard=1)
 
     pre_w = params["pre_conv3_w"]
     lex_len = len(rib_emb) - 2
@@ -260,19 +257,12 @@ def _fuse_block0_cells(
         lex_rib += rib_emb[offset : offset + lex_len] @ pre_w[offset]
     lex_act = np.maximum(lex_rib[pre_pos - 1], 0.0)
 
-    has_prev = (spans.line_starts > 0)[:, None]
-    prev_idx = np.maximum(spans.line_starts - 1, 0)
     pref1_in = np.concatenate([emb_act, lex_act], axis=-1) @ params["pref1_proj"]
-    pref1_cs = np.cumsum(pref1_in, axis=0)
-    pref1_base = np.where(has_prev, pref1_cs[prev_idx], 0.0)
-    prefix1 = pref1_cs - pref1_base[spans.line_ids] - pref1_in
+    prefix1 = _line_cumsum(pref1_in, spans.line_starts, spans.line_ids) - pref1_in
 
     gate_in = np.concatenate([emb_act, lex_act, prefix1], axis=-1)
     gates = np.maximum(gate_in @ params["gate1_w"] + params["gate1_b"], 0.0)
-    pref2_in = gates @ params["pref2_proj"]
-    pref2_cs = np.cumsum(pref2_in, axis=0)
-    pref2_base = np.where(has_prev, pref2_cs[prev_idx], 0.0)
-    prefix2 = pref2_cs - pref2_base[spans.line_ids]
+    prefix2 = _line_cumsum(gates @ params["pref2_proj"], spans.line_starts, spans.line_ids)
 
     fuse_in = np.concatenate([emb_act, lex_act, gates, prefix2], axis=-1)
     return np.maximum(fuse_in @ params["col_fuse_w"] + params["col_fuse_b"], 0.0)
@@ -281,8 +271,8 @@ def _fuse_block0_cells(
 def _block01_active_lines(
     params: dict[str, np.ndarray],
     grid: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Run Block 0 masking and Block 1 k=3/7/13/sketch convolutions on occupied spans."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Run Block 0 masking and Block 1 k=3/7/sketch convolutions on occupied spans."""
     num_lines = grid.shape[0]
     col_sums = np.zeros((num_lines, params["col_sum_proj"].shape[1]), dtype=np.float32)
     banks = {
@@ -291,28 +281,22 @@ def _block01_active_lines(
     }
     spans = _extract_active_spans(grid)
     if spans is None:
-        return col_sums, banks["conv3"], banks["conv7"], banks["conv13"], banks["sketch"]
+        return col_sums, banks["conv3"], banks["conv7"], banks["sketch"]
 
     cells_act = _fuse_block0_cells(params, grid, spans)
     col_sums[spans.nonblank] = (
         np.add.reduceat(cells_act, spans.line_starts, axis=0) @ params["col_sum_proj"]
     )
 
-    rib_starts = np.empty(len(spans.nonblank) + 1, dtype=np.int32)
-    rib_starts[0] = _RIBBON_GUARD
-    np.cumsum(spans.span_lens + _RIBBON_GUARD, out=rib_starts[1:])
-    rib_pos = rib_starts[:-1][spans.line_ids] + spans.within_col
-    rib_cells = np.empty(
-        (int(rib_starts[-1]) + _RIBBON_GUARD, cells_act.shape[1]), dtype=np.float32
+    pad_fill = np.maximum(params["col_fuse_b"], 0.0)
+    rib_cells, rib_starts, rib_pos = _scatter_ribbon(
+        cells_act, spans, guard=_RIBBON_GUARD, fill=pad_fill
     )
-    rib_cells[:] = np.maximum(params["col_fuse_b"], 0.0)
-    rib_cells[rib_pos] = cells_act
-
     for name in _CONV_BANKS:
         banks[name][spans.nonblank] = _ribbon_conv_sum(
             rib_cells, rib_starts, rib_pos, spans, params[f"{name}_w"], params[f"{name}_b"]
         )
-    return col_sums, banks["conv3"], banks["conv7"], banks["conv13"], banks["sketch"]
+    return col_sums, banks["conv3"], banks["conv7"], banks["sketch"]
 
 
 def _attend_banded_heads(
@@ -345,14 +329,17 @@ def _attend_banded_heads(
     active_offsets = [
         off for off in range(-rad + 1, rad) if np.any(rel_sub[:, off + rad] > -1e3)
     ]
+
     for off in active_offsets:
         q_start, q_end = max(0, -off), min(num_lines, num_lines - off)
         if q_start >= q_end:
             continue
+
         slot = off + rad
         act_mask = rel_sub[:, slot] > -1e3
         h_act = np.flatnonzero(act_mask)
         logits[h_act, q_start:q_end, slot] = rel_sub[h_act, slot : slot + 1]
+
         if q_sub is not None and k_sub is not None:
             h_qk = np.flatnonzero(act_mask & has_q)
             if len(h_qk):
@@ -400,10 +387,22 @@ def _attend_global_head(
     return weights_h @ v_head
 
 
+def _project_qk(
+    state: np.ndarray, wq: np.ndarray | None, wk: np.ndarray | None, num_heads: int
+) -> tuple[np.ndarray | None, np.ndarray | None, int, bool]:
+    if wq is None or wk is None or not (np.any(wq != 0) and np.any(wk != 0)):
+        return None, None, 1, False
+    num_lines = state.shape[0]
+    head_dim = wq.shape[1] // num_heads
+    q_proj = (state @ wq).reshape(num_lines, num_heads, head_dim).transpose(1, 0, 2)
+    k_proj = (state @ wk).reshape(num_lines, num_heads, head_dim).transpose(1, 0, 2)
+    return q_proj, k_proj, head_dim, True
+
+
 def _sink_attn(
     state: np.ndarray,
-    wq: np.ndarray,
-    wk: np.ndarray,
+    wq: np.ndarray | None,
+    wk: np.ndarray | None,
     wv: np.ndarray,
     wo: np.ndarray,
     b_rel: np.ndarray,
@@ -411,16 +410,9 @@ def _sink_attn(
 ) -> np.ndarray:
     """Multi-head relative-offset attention across lines with O(L) banded execution."""
     num_lines, num_heads = state.shape[0], b_sink.shape[0]
-    head_dim = wq.shape[1] // num_heads
     val_dim = wv.shape[1] // num_heads
-
     v_proj = (state @ wv).reshape(num_lines, num_heads, val_dim).transpose(1, 0, 2)
-    has_qk = bool(np.any(wq != 0) and np.any(wk != 0))
-    if has_qk:
-        q_proj = (state @ wq).reshape(num_lines, num_heads, head_dim).transpose(1, 0, 2)
-        k_proj = (state @ wk).reshape(num_lines, num_heads, head_dim).transpose(1, 0, 2)
-    else:
-        q_proj = k_proj = None
+    q_proj, k_proj, head_dim, has_qk = _project_qk(state, wq, wk, num_heads)
     inv_scale = np.float32(1.0 / np.sqrt(float(head_dim)))
 
     banded = [h for h in range(num_heads) if b_rel[h, 0] <= -1e3 and b_rel[h, -1] <= -1e3]
@@ -435,7 +427,7 @@ def _sink_attn(
         if head in banded_set:
             continue
         h_slice = slice(head * head_dim, (head + 1) * head_dim)
-        qh_zero = (not has_qk) or (not np.any(wq[:, h_slice] != 0))
+        qh_zero = (not has_qk) or wq is None or (not np.any(wq[:, h_slice] != 0))
         q_h = q_proj[head] if q_proj is not None else None
         k_h = k_proj[head] if k_proj is not None else None
         merged[head] = _attend_global_head(
@@ -454,31 +446,36 @@ def encode_byte_grid(code: str, max_lines: int | None = None) -> tuple[np.ndarra
             continue
         clipped = text[:MAX_COLS]
         if clipped.isascii():
-            ascii_codes = np.frombuffer(clipped.encode("ascii"), dtype=np.uint8)
+            codes = np.frombuffer(clipped.encode("ascii"), dtype=np.uint8)
         else:
-            codepoints = np.frombuffer(clipped.encode("utf-32-le"), dtype=np.uint32)
-            ascii_codes = np.minimum(codepoints, 127).astype(np.uint8)
-        grid[row, : len(ascii_codes)] = np.where(ascii_codes == 0, 32, ascii_codes)
+            codes = np.fromiter(
+                (127 if ord(ch) > 127 else ord(ch) for ch in clipped), dtype=np.uint8
+            )
+        grid[row, : len(codes)] = np.where(codes == 0, 32, codes)
     return grid, lines
 
 
 def _peak_window_density(state: np.ndarray, active_gate: np.ndarray) -> np.ndarray:
-    pos_weighted = _relu(state) * active_gate
-    zero_row = np.zeros((1, state.shape[1]), dtype=np.float32)
-    if len(pos_weighted) > 1:
-        prev_span = np.vstack([zero_row, pos_weighted[:-1]])
-        if len(pos_weighted) >= 2:
-            zero_two = np.zeros((2, state.shape[1]), dtype=np.float32)
-            prev_span = np.maximum(prev_span, np.vstack([zero_two, pos_weighted[:-2]]))
-        overlap = np.minimum(pos_weighted, prev_span)
-        pos_weighted = pos_weighted - (1.0 - _SPAN_CONT_WEIGHT) * overlap
-    zero_gate = np.zeros((1, 1), dtype=np.float32)
-    pad_w = np.vstack([zero_row, np.cumsum(pos_weighted, axis=0)])
-    pad_g = np.vstack([zero_gate, np.cumsum(active_gate, axis=0)])
-    hi_idx = np.arange(1, len(state) + 1)
+    """Compute maximum span-damped issue density across sliding 32-line windows."""
+    raw_pos = _relu(state) * active_gate
+    num_lines = raw_pos.shape[0]
+    if num_lines > 1:
+        prev1 = np.vstack([np.zeros((1, raw_pos.shape[1]), dtype=raw_pos.dtype), raw_pos[:-1]])
+        prev2 = np.vstack([np.zeros((2, raw_pos.shape[1]), dtype=raw_pos.dtype), raw_pos[:-2]])
+        overlap = np.minimum(raw_pos, np.maximum(prev1, prev2))
+        pos = raw_pos - (1.0 - _SPAN_CONT_WEIGHT) * overlap
+    else:
+        pos = raw_pos
+
+    pad_w = np.vstack([np.zeros((1, pos.shape[1]), dtype=pos.dtype), np.cumsum(pos, axis=0)])
+    pad_g = np.vstack([
+        np.zeros((1, 1), dtype=active_gate.dtype),
+        np.cumsum(active_gate, axis=0),
+    ])
+    hi_idx = np.arange(1, num_lines + 1)
     lo_idx = np.maximum(0, hi_idx - _PEAK_WINDOW)
-    win_gate = np.maximum(pad_g[hi_idx] - pad_g[lo_idx], _PEAK_MIN_GATE) + _PEAK_PRIOR
-    return ((pad_w[hi_idx] - pad_w[lo_idx]) / win_gate).max(axis=0)
+    denom = np.maximum(pad_g[hi_idx] - pad_g[lo_idx], _PEAK_MIN_GATE) + _PEAK_PRIOR
+    return ((pad_w[hi_idx] - pad_w[lo_idx]) / denom).max(axis=0)
 
 
 def _append_multiline_state(params: dict[str, np.ndarray], raw_feats: np.ndarray) -> np.ndarray:
@@ -488,7 +485,7 @@ def _append_multiline_state(params: dict[str, np.ndarray], raw_feats: np.ndarray
     ml_excl = np.cumsum(ml_deltas, axis=0) - ml_deltas
     ml_saw = _relu(ml_excl @ params["ml_gate_w"] + params["ml_gate_b"])
     paren_suf = _relu(
-        _conv1d(ml_deltas[None, :, :], params["ml_paren_w"], params["ml_paren_b"])[0]
+        _conv1d_grid(ml_deltas[None, :, :], params["ml_paren_w"], params["ml_paren_b"])[0]
     )
     return np.concatenate([raw_feats, ml_saw, paren_suf], axis=-1)
 
@@ -507,12 +504,12 @@ def _pool_document_vector(
     return np.concatenate([doc_mean, doc_max], axis=-1)
 
 
-def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarray, ...]:
-    """Execute the 4-block ternary neural forward pass on an ASCII byte grid."""
-    col_sums, conv3, conv7, conv13, raw_sketch = _block01_active_lines(params, grid)
+def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarray, float]:
+    """Execute the 4-block zero-vocabulary ternary forward pass on an ASCII byte grid."""
+    col_sums, conv3, conv7, raw_sketch = _block01_active_lines(params, grid)
     sketch = _relu(raw_sketch) - _relu(raw_sketch - 1.0)
     line_feats = _append_multiline_state(
-        params, np.concatenate([col_sums, conv3, conv7, conv13], axis=-1)
+        params, np.concatenate([col_sums, conv3, conv7], axis=-1)
     )
 
     line_hidden = _relu(line_feats @ params["lmlp1_w"] + params["lmlp1_b"])
@@ -526,8 +523,8 @@ def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarra
     for layer in ("1", "2"):
         state = state + _sink_attn(
             state,
-            params[f"attn{layer}_wq"],
-            params[f"attn{layer}_wk"],
+            params.get(f"attn{layer}_wq"),
+            params.get(f"attn{layer}_wk"),
             params[f"attn{layer}_wv"],
             params[f"attn{layer}_wo"],
             params[f"attn{layer}_brel"],
@@ -541,12 +538,7 @@ def _forward(params: dict[str, np.ndarray], grid: np.ndarray) -> tuple[np.ndarra
     doc_vec = _pool_document_vector(params, state, active_gate)
     doc_hidden = _relu(doc_vec @ params["doc1_w"] + params["doc1_b"])
     logits = doc_hidden @ params["doc2_w"] + params["doc2_b"]
-
-    noul_probs = _sigmoid(logits[:2])
-    score_grid = logits[2:_SCORE_LOGIT_END].reshape(_N_SCORES, 4)
-    subscores = (_softmax(score_grid) * _LEVELS[None, :]).sum(axis=-1)
-    style_probs = _softmax(logits[_SCORE_LOGIT_END:_STYLE_LOGIT_END])
-    return line_probs, noul_probs, subscores, style_probs
+    return line_probs, float(_sigmoid(logits)[0])
 
 
 def _parse_archive_entry(entry: str) -> tuple[str, tuple[int, ...], int]:
@@ -630,15 +622,11 @@ def score(
     threshold: float = 0.55,
     weights: dict[str, np.ndarray] | None = None,
 ) -> Result:
-    """Score `code` and return overall readability, sub-scores, style, and squiggles."""
+    """Score `code` and return overall geometric cleanliness and line squiggles."""
     grid, lines = encode_byte_grid(code)
-    line_probs, heads, subscores, styles = _forward(weights or load_weights(), grid)
+    line_probs, doc_score = _forward(weights or load_weights(), grid)
     return Result(
-        score=float(heads[0]),
-        rl_hygiene=float(heads[1]),
-        scores=dict(zip(SCORE_NAMES, map(float, subscores), strict=True)),
-        archetype=ARCHETYPE_NAMES[int(np.argmax(styles))],
-        archetype_probs=dict(zip(ARCHETYPE_NAMES, map(float, styles), strict=True)),
+        score=doc_score,
         squiggles=_collect_squiggles(lines, line_probs, threshold),
         line_probs=line_probs,
     )
@@ -672,16 +660,10 @@ def _squiggle_event_load(squiggles: list[Squiggle], threshold: float = 0.55) -> 
     return load
 
 
-def _rl_from_result(
-    res: Result,
-    *,
-    weight: float = 0.25,
-    hygiene_blend: float = 0.5,
-) -> float:
-    blended = (1.0 - hygiene_blend) * res.score + hygiene_blend * res.rl_hygiene
+def _rl_from_result(res: Result, *, weight: float = 0.25) -> float:
     load = _squiggle_event_load(res.squiggles)
     squiggle_damp = 1.0 / (1.0 + 1.5 * (load**0.85)) if load > 0.0 else 1.0
-    return 1.0 + weight * blended * squiggle_damp
+    return 1.0 + weight * res.score * squiggle_damp
 
 
 def rl_reward(
@@ -689,13 +671,33 @@ def rl_reward(
     tests_passed: bool | float = True,
     *,
     weight: float = 0.25,
-    hygiene_blend: float = 0.5,
 ) -> float:
     """Compute test-gated RL coding reward with telescopic squiggle damping."""
     gate = float(tests_passed)
     if gate <= 0.0:
         return 0.0
-    return gate * _rl_from_result(score(code), weight=weight, hygiene_blend=hygiene_blend)
+    return gate * _rl_from_result(score(code), weight=weight)
+
+
+def _load_submodule(mod_name: str) -> Any:
+    if __package__:
+        return __import__(f"{__package__}.{mod_name}", fromlist=[mod_name])
+    pkg_dir = str(Path(__file__).resolve().parent)
+    if pkg_dir not in sys.path:
+        sys.path.insert(0, pkg_dir)
+    return __import__(mod_name)
+
+
+def project_target_grid(
+    code: str,
+    *,
+    threshold: float = 0.55,
+    weights: dict[str, np.ndarray] | None = None,
+) -> Any:
+    """Project `code`'s flagged byte-grid regions onto a verified green target slice."""
+    return _load_submodule("grid_target").project_target_grid(
+        code, threshold=threshold, weights=weights, hygiene=sys.modules[__name__]
+    )
 
 
 def render_report(
@@ -705,33 +707,25 @@ def render_report(
     color: bool = True,
     res: Result | None = None,
 ) -> str:
-    """Format a human-readable terminal report with bar sub-scores and underlines."""
+    """Format a minimalist report with flagged lines and projected green target grid."""
     _, lines = encode_byte_grid(src)
     result = res or score(src, threshold=thresh)
-    bold, dim, yel, cyan, grn, red, rst = _ANSI if color else ("",) * 7
+    bold, dim, yel, grn, red, rst = _ANSI if color else ("",) * 6
     tone = (red, yel, grn)[int(result.score >= 0.40) + int(result.score >= 0.70)]
-    style_pct = result.archetype_probs[result.archetype] * 100
-
-    out = [
-        f"{bold}{label}{rst}",
-        f"  score: {tone}{result.score:.3f}{rst}  rl_hygiene: {cyan}{result.rl_hygiene:.3f}{rst}  "
-        f"style: {bold}{result.archetype}{rst} ({style_pct:.0f}%)",
-    ]
-    for name, val in result.scores.items():
-        filled = round(max(0.0, min(1.0, val)) * 16)
-        bar = "#" * filled + "." * (16 - filled)
-        out.append(f"    {name:15s} {bar} {val:.2f}")
     if not result.squiggles:
-        return "\n".join([*out, f"\n  {grn}ok - no squiggles (threshold {thresh:.2f}){rst}"])
+        return f"{bold}{label}{rst}  {tone}{result.score:.3f}/1{rst}"
 
-    out.append(f"\n  {yel}{len(result.squiggles)} squiggle(s):{rst}")
+    proj = project_target_grid(src, threshold=thresh)
+    header = f"{bold}{label}{rst}  {tone}{result.score:.3f}/1{rst}"
+    if proj.target_slice:
+        header += f" -> {grn}{proj.target_score:.3f}/1{rst}"
+    out = [header]
     for sq in result.squiggles:
-        src_line = lines[sq.line - 1]
-        indent_pad = " " * (sq.col_start - 1)
-        wavy = "~" * max(1, min(len(src_line) - sq.col_start + 1, 72))
-        tag = f"[{sq.kind} {sq.probability:.2f}]"
-        out.append(f"  {dim}{sq.line:4d} |{rst} {src_line}")
-        out.append(f"       {dim}|{rst} {indent_pad}{yel}{wavy} {tag}{rst} {dim}{sq.message}{rst}")
+        snippet = lines[sq.line - 1][:88]
+        out.append(f"  {yel}{sq.line:3d}!|{rst} {snippet}")
+    if proj.target_slice:
+        out.append(f"  {dim}target:{rst}")
+        out.append(proj.target_slice)
     return "\n".join(out)
 
 
@@ -760,20 +754,20 @@ def _expand_paths(specs: list[str]) -> list[Path]:
 
 
 def _load_update_module() -> Any:
-    if __package__:
-        from . import update_check
+    return _load_submodule("update_check")
 
-        return update_check
-    pkg_dir = str(Path(__file__).resolve().parent)
-    if pkg_dir not in sys.path:
-        sys.path.insert(0, pkg_dir)
-    import update_check
 
-    return update_check
+def _json_payload(src: str, thresh: float, res: Result) -> dict[str, Any]:
+    data = res.to_dict()
+    proj = project_target_grid(src, threshold=thresh) if res.squiggles else None
+    if proj is not None and proj.target_slice:
+        data["target_score"] = round(proj.target_score, 4)
+        data["target_grid"] = proj.target_slice
+    return data
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    desc = "A 23.8 KiB, 1.58-bit ternary weight-space programmed System One model for code hygiene."
+    desc = "Zero-vocabulary 1.58-bit ternary model for code geometry and structural hygiene."
     parser = argparse.ArgumentParser(prog="codehygiene", description=desc)
     parser.add_argument("files", nargs="*", help="Files, directories, or globs (stdin if piped)")
     parser.add_argument("-t", "--threshold", type=float, default=0.55, help="Squiggle threshold")
@@ -785,8 +779,17 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _ensure_utf8_stdout() -> None:
+    """Switch non-UTF-8 stdout (Windows pipes default to cp1252) so target grids can print."""
+    stream = sys.stdout
+    encoding = getattr(stream, "encoding", None) or "ascii"
+    if codecs.lookup(encoding).name != "utf-8" and hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for `codehygiene`."""
+    _ensure_utf8_stdout()
     parser = _build_parser()
     args = parser.parse_args(argv)
     if not args.files and sys.stdin.isatty():
@@ -807,18 +810,21 @@ def main(argv: list[str] | None = None) -> int:
     update_handle = updater.start_update_check(__version__, disabled=args.no_update_check)
     runs = [(label, src, score(src, threshold=args.threshold)) for label, src in targets]
     exit_code = 1 if (args.check and any(res.squiggles for _, _, res in runs)) else 0
+
     if args.json:
-        payloads = [res.to_dict() for _, _, res in runs]
+        payloads = [_json_payload(src, args.threshold, res) for _, src, res in runs]
         is_single = len(payloads) == 1 and (not args.files or not Path(args.files[0]).is_dir())
         labels = (lbl for lbl, _, _ in runs)
         body = payloads[0] if is_single else dict(zip(labels, payloads, strict=True))
         print(json.dumps(body, indent=2))
     else:
-        reports = [
-            render_report(lbl, src, args.threshold, not args.no_color, res)
-            for lbl, src, res in runs
-        ]
-        print("\n\n".join(reports))
+        shown = [item for item in runs if item[2].squiggles] if args.check else runs
+        if shown:
+            reports = [
+                render_report(lbl, src, args.threshold, not args.no_color, res)
+                for lbl, src, res in shown
+            ]
+            print("\n\n".join(reports))
 
     updater.emit_update_notice(update_handle)
     return exit_code
