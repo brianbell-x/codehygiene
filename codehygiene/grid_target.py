@@ -1562,13 +1562,17 @@ class _Tail:
     value: bytes = b""
 
 
+_Row = tuple[int, bytes, int, int]  # indent steps, text, first and last source row
+
+
 @dataclass(frozen=True)
 class _LadderPlan:
-    """Replacement rows for ladder rows `lo..hi`, and an optional table inserted at row `at`."""
+    """Replacement rows for ladder rows `lo..hi` (each tagged with the rung it comes from), and an
+    optional table inserted at row `at`."""
 
     lo: int
     hi: int
-    rows: list[tuple[int, bytes]]
+    rows: list[_Row]
     at: int = -1
     table: tuple[tuple[int, bytes], ...] = ()
     blanks: int = 0
@@ -1695,37 +1699,40 @@ def _returned(body: bytes) -> bytes | None:
     return value if _starts_word(text, _RETURN) and value else None
 
 
-def _switch_rows(rungs: list[_Rung], family: str) -> list[tuple[int, bytes]]:
+def _switch_rows(rungs: list[_Rung], family: str) -> list[_Row]:
     """`switch` with one `case KEY:` per rung and the rung's own statement, in Go or C-family form."""
-    subject = rungs[0].subject
+    subject, lo, hi = rungs[0].subject, rungs[0].lo, rungs[-1].hi
     if family == "go":
-        rows = [(0, b"switch " + subject + b" {")]
+        rows = [(0, b"switch " + subject + b" {", lo, hi)]
         for rung in rungs:
-            rows += [(0, b"case " + rung.key + b":"), (1, rung.body)]
-        return [*rows, (0, b"}")]
+            rows += [(0, b"case " + rung.key + b":", rung.lo, rung.hi), (1, rung.body, rung.lo, rung.hi)]
+        return [*rows, (0, b"}", lo, hi)]
     head = b"switch " + (subject if subject[:1] == b"(" else b"(" + subject + b")") + b" {"
-    stops = [any(_starts_word(rung.body, word) for word in _EXITS) for rung in rungs]
-    cases = [(1, b"case " + r.key + b": " + r.body + (b"" if stop else b" break;")) for r, stop in zip(rungs, stops)]
-    return [(0, head), *cases, (0, b"}")]
+    cases = []
+    for rung in rungs:
+        stop = any(_starts_word(rung.body, word) for word in _EXITS)
+        cases.append((1, b"case " + rung.key + b": " + rung.body + (b"" if stop else b" break;"), rung.lo, rung.hi))
+    return [(0, head, lo, hi), *cases, (0, b"}", lo, hi)]
 
 
-def _case_rows(rungs: list[_Rung]) -> list[tuple[int, bytes]] | None:
+def _case_rows(rungs: list[_Rung]) -> list[_Row] | None:
     """Python `match` with one `case KEY:` per rung and its own statement; keys must be values, not names."""
     if not all(_literal(rung.key) or 46 in rung.key for rung in rungs):
         return None
-    cases = [row for rung in rungs for row in ((1, b"case " + rung.key + b":"), (2, rung.body))]
-    return [(0, b"match " + rungs[0].subject + b":"), *cases]
+    cases = [row for r in rungs for row in ((1, b"case " + r.key + b":", r.lo, r.hi), (2, r.body, r.lo, r.hi))]
+    return [(0, b"match " + rungs[0].subject + b":", rungs[0].lo, rungs[-1].hi), *cases]
 
 
-def _match_rows(rungs: list[_Rung], tail: _Tail) -> list[tuple[int, bytes]] | None:
+def _match_rows(rungs: list[_Rung], tail: _Tail) -> list[_Row] | None:
     """Rust `match` arms `KEY => VALUE,` with the default as `_ => D,`, as the function's value."""
     values = [_returned(rung.body) for rung in rungs]
     if None in values or tail.kind not in ("return", "tail"):
         return None
     lead = b"return " if tail.kind == "return" else b""
-    arms = [(1, rung.key + b" => " + value + b",") for rung, value in zip(rungs, values)]
-    end = b"};" if lead else b"}"
-    return [(0, lead + b"match " + rungs[0].subject + b" {"), *arms, (1, b"_ => " + tail.value + b","), (0, end)]
+    lo, hi = rungs[0].lo, tail.row
+    arms = [(1, rung.key + b" => " + value + b",", rung.lo, rung.hi) for rung, value in zip(rungs, values)]
+    head = (0, lead + b"match " + rungs[0].subject + b" {", lo, hi)
+    return [head, *arms, (1, b"_ => " + tail.value + b",", hi, hi), (0, b"};" if lead else b"}", lo, hi)]
 
 
 def _upper_snake(name: bytes) -> bytes:
@@ -1798,7 +1805,7 @@ def _table_plan(
         table = ((0, b"const " + name + b" = new Map(["), *entries, (0, b"])" + syntax.semi))
         lookup = _RETURN + b" " + get + b")" + (b" ?? " + default if default else b"") + syntax.semi
     hi = tail.row if tail.kind == "return" else rungs[-1].hi
-    return _LadderPlan(rungs[0].lo, hi, [(0, lookup)], top, table, blanks)
+    return _LadderPlan(rungs[0].lo, hi, [(0, lookup, rungs[0].lo, hi)], top, table, blanks)
 
 
 def _plan_ladder(lines: _Lines, row: int, syntax: _Syntax) -> _LadderPlan | None:
@@ -1853,8 +1860,8 @@ def _apply_ladder(
             out.extend((0, b"", -1, -1, True) for _ in range(plan.blanks))
         plan = plans.get(row)
         ind, unit = lines.indent(row), _rung_unit(lines, plan, syntax) if plan else 0
-        rows = plan.rows if plan else [(0, b"")]
-        out.extend((ind + step * unit, text, row, plan.hi if plan else row, bool(plan)) for step, text in rows)
+        rows = plan.rows if plan else [(0, b"", row, row)]
+        out.extend((ind + step * unit, text, lo, hi, bool(plan)) for step, text, lo, hi in rows)
         row = plan.hi + 1 if plan else row + 1
     built = _assemble(grid, prov, out) if plans else None
     if built is None:
