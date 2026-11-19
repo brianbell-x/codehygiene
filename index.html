@@ -17,8 +17,8 @@
   <meta property="og:image:alt" content="Python code with a deeply nested line flagged by CodeHygiene">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=df4bd1aedb">
-  <script type="module" src="app.js?v=df4bd1aedb"></script>
+  <link rel="stylesheet" href="styles.css?v=c64f8173a7">
+  <script type="module" src="app.js?v=c64f8173a7"></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true">
@@ -116,7 +116,7 @@
                 </p>
                 <div class="view-switch" id="view-switch" role="group" aria-label="View">
                   <button type="button" data-view="code" aria-pressed="true">Code</button>
-                  <button type="button" data-view="shape" aria-pressed="false">Grid</button>
+                  <button type="button" data-view="shape" aria-pressed="false" title="How the model reads this file">Model's View</button>
                 </div>
               </div>
               <div class="nav">
@@ -137,6 +137,7 @@
                 </button>
               </div>
             </header>
+            <p class="view-hint" id="view-hint" hidden>One character per cell, 128 columns wide, as the model reads it. Layout drives most flags; letters matter only when lines are compared.</p>
             <div class="stage-code" id="stage-code" role="region" tabindex="0" aria-label="File contents"></div>
             <div class="readout" id="readout" role="tooltip" hidden></div>
             <div class="readout legend" id="suggest-legend" role="tooltip" hidden></div>
