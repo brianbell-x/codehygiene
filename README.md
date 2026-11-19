@@ -52,6 +52,14 @@ Each `■` is two bytes of code, and `<-N` marks the source line a row came from
 
 Bugs, type errors, and security issues are out of scope. Newly written or changed code is the intended target, not whole legacy repositories.
 
+## Benchmarks
+
+| | v0.7.0 |
+| :--- | :--- |
+| Size | 8 KB of weights, NumPy only |
+| Speed (warm CPU) | about 5 ms for 12 lines, 15 ms for 65, 70 ms for 333 |
+| Browser | same scores as Python |
+
 ## Python and JavaScript
 
 ```python
