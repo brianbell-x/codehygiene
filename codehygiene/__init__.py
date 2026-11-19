@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import math
 import os
@@ -778,8 +779,17 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _ensure_utf8_stdout() -> None:
+    """Switch non-UTF-8 stdout (Windows pipes default to cp1252) so target grids can print."""
+    stream = sys.stdout
+    encoding = getattr(stream, "encoding", None) or "ascii"
+    if codecs.lookup(encoding).name != "utf-8" and hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for `codehygiene`."""
+    _ensure_utf8_stdout()
     parser = _build_parser()
     args = parser.parse_args(argv)
     if not args.files and sys.stdin.isatty():
