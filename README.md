@@ -42,7 +42,7 @@ Inference is executed in [`codehygiene/__init__.py`](codehygiene/__init__.py) (`
 
 ## Benchmarks
 
-Unified, version-tagged evaluation suites in [`evals/evals.json`](evals/evals.json)—covering controlled 8-kind circuit gates, per-issue regression suites, deduplicated 20-language polyglot traps and structural-friction recall, before/after edit-alignment pairs, adversarial RL-gaming probes, JS parity, untuned held-out CPython 3.13 stdlib modules (`25` files, `25,306` lines), and, when present, a held-out sample of the local Go module cache (`352` files, `60,302` lines)—are evaluated via [`evals/run_evals.py`](evals/run_evals.py):
+Results from a private, version-tagged evaluation suite (`evals.json`)—covering controlled 8-kind circuit gates, per-issue regression suites, deduplicated 20-language polyglot traps and structural-friction recall, before/after edit-alignment pairs, adversarial RL-gaming probes, JS parity, untuned held-out CPython 3.13 stdlib modules (`25` files, `25,306` lines), and a held-out sample of the Go module cache (`352` files, `60,302` lines):
 
 | Suite / Metric | `v0.4.0` (`12.97 KiB`) | `v0.5.1` (`14.85 KiB`) | `v0.6.1` (`23.84 KiB`) |
 | :--- | :---: | :---: | :---: |
@@ -66,8 +66,6 @@ Unified, version-tagged evaluation suites in [`evals/evals.json`](evals/evals.js
 
 ```bash
 python3 compile.py                              # deterministic weight compilation -> weights.npz
-python3 evals/run_evals.py --check              # version-sync, controlled, regression, polyglot, anti-gaming, JS-parity & stdlib gates
-python3 evals/run_evals.py --compare a.npz b.npz
 ```
 
 ## References

@@ -32,22 +32,22 @@
   - `compile.py` — Deterministic Weight-Space Program that compiles all `35` `{-1, 0, +1}` matrices (`1,244,706` trits packed at 5 trits/byte) and `7,102` 1D scale/bias scalars into `codehygiene/weights.npz`.
   - `codehygiene/weights.npz` — Compiled `23.84 KiB` (`1.58-bit` ternary) checkpoint loaded at runtime.
   - `codehygiene/engine.js` — Pure-JavaScript (`Float32Array`) neural scorer unpacking `weights.npz` directly in browsers and Node.
-  - `evals/` — Unified version-tagged evaluation dataset (`evals.json`) and runner (`run_evals.py`) covering controlled 8-kind suites, per-issue regressions, 20-language polyglot & structural-friction suites, edit-alignment pairs, adversarial/anti-gaming probes, JS parity, CPython stdlib, Go module cache, and public docstring version sync. Add each reported false positive to `evals.json` (`regressions`) with clean variants and recall guards before repairing its circuit.
+  - `.codex-notes/evals/` (private, gitignored) — Unified version-tagged evaluation dataset (`evals.json`) and runner (`run_evals.py`) covering controlled 8-kind suites, per-issue regressions, 20-language polyglot & structural-friction suites, edit-alignment pairs, adversarial/anti-gaming probes, JS parity, CPython stdlib, Go module cache, and public docstring version sync. Add each reported false positive to `evals.json` (`regressions`) with clean variants and recall guards before repairing its circuit.
 - **Architecture pipeline (`_forward`):**
   1. **Block 0 (Column Prefix & Masking):** `tok_emb (128, 51)` + `col_emb (128, 51)` -> `pre_conv3` -> causal prefix `W_causal1` -> `gate1` (32-quote sawtooth `"`/`'`/`` ` `` parity + polyglot comment & Zig `\\` raw-string openers) -> `W_causal2` -> `col_fuse` (`54` channels, including string-discounted `C2_EFF_LEN` column width).
   2. **Block 1 (Line Convolutions, Multiline State & Sketches):** Multi-scale column `Conv1D` (`k=3, 7, 13` via L3-tiled `im2col`) + cross-line `"""`/`'''`/`/* */` docstring/comment sawtooth (`ml_proj`, `ml_gate_w`) + 16-line Dyck parenthesis balance and previous-line comment/`err != nil` taps (`ml_paren_w`) + 3-slice SimHash `sketch` (`40` code + `40` comment + `40` alpha-invariant operator-skeleton dims, L2-normalized) + `lmlp1/2` -> `Z` (`L, 322`).
   3. **Block 2 (Banded Cross-Line Sink Attention):** Two `O(L)` residual blocks of `12`-head and `9`-head relative-position attention (`[-32..+32]` + Bayesian sink priors `bsink`) and context MLPs (`cmlp1`, `cmlp2`) computing narrator-comment overlap, polyglot swallowed-error spans, class-relative indentation & in-branch cursor jumps, high-arity boolean/out-ref signatures, golfed short-name/magic-index clusters, rhythm walls, and literal/alpha-renamed clones.
   4. **Block 3 (System One Heads):** Per-line squiggle head (`sq_w`, 8 kinds) + docstring-masked Bayesian mean (`_PRIOR_LINES = 16`) and span-damped 32-line peak-window density pooling into paired-clamp saturating `doc1/doc2` (`score`, `rl_hygiene`, 6 four-level sub-scores, 5 style archetypes).
 - **Hard invariants:**
-  - Keep the repository root restricted to public package, documentation, and `evals/` files; store all non-public prototypes, training corpora, RL environments, Space services, scratch media, and agent handoffs inside `.codex-notes/<subdir>/`.
+  - Keep the repository root restricted to public package and documentation files (no public `evals/` directory); store evaluations (`.codex-notes/evals/`) and all non-public prototypes, training corpora, RL environments, Space services, scratch media, and agent handoffs inside `.codex-notes/<subdir>/`.
   - Never hand-edit `codehygiene/weights.npz`; express all behavior changes in `compile.py` and run `python3 compile.py`.
   - Keep `_forward` strictly neural (matrix multiplies, 1D convolutions, causal prefix sums, elementwise activations, attention). Do not introduce regexes, tokenizers, or AST parsers into inference.
   - Keep runtime dependencies limited to `numpy` with zero OS-specific or native extensions, and keep `codehygiene/engine.js` numerically synchronized with `codehygiene/__init__.py`.
-  - Keep `codehygiene vX.Y.Z` in the opening docstring/JSDoc of every public `.py` and `.js` module and `"version": "X.Y.Z"` in `evals/evals.json` synchronized with `pyproject.toml`; do not add separate `.json` or runner files to `evals/`.
+  - Keep `codehygiene vX.Y.Z` in the opening docstring/JSDoc of every public `.py` and `.js` module and `"version": "X.Y.Z"` in `.codex-notes/evals/evals.json` synchronized with `pyproject.toml`; do not add separate `.json` or runner files to `.codex-notes/evals/`.
   - Verify self-hygiene and `evals` gates before committing:
     ```bash
     python3 compile.py
-    python3 -m codehygiene codehygiene compile.py evals --check --no-color --no-update-check
-    python3 evals/run_evals.py --check
+    python3 -m codehygiene codehygiene compile.py .codex-notes/evals --check --no-color --no-update-check
+    python3 .codex-notes/evals/run_evals.py --check
     ```
   - After making circuit, runtime, or benchmark changes, render an interactive HTML report comparing previous vs. updated model performance (held-out CPython stdlib distribution, adversarial RL-gaming probes, controlled recall & clean traps, CPU latency scaling, and concrete Before/After code diffs).
