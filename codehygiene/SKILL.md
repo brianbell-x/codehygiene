@@ -6,7 +6,7 @@ description: >-
 
 # Code Hygiene
 
-Passing tests, typecheckers, and formatters (`ruff`, `eslint`, `prettier`, `rustfmt`, `gofmt`, `clang-format`) verifies execution and surface syntax rather than 2D structural readability. Run `codehygiene` on newly written or modified code to catch structural clutter while applying engineering judgment to every diagnostic.
+Passing tests, typecheckers, and formatters (`ruff`, `eslint`, `prettier`, `rustfmt`, `gofmt`, `clang-format`) verify execution and surface syntax rather than 2D structural readability. Run `codehygiene` on newly written or modified code to catch structural clutter while applying engineering judgment to every diagnostic.
 
 ## Preview Status & Scope Disclaimer
 
